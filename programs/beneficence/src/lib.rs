@@ -15,20 +15,26 @@ pub mod crowdfunding_platform {
         token_mint: Pubkey,
     ) -> Result<()> {
         require!(target > 0, CrowdFundError::InvalidTarget);
-        let campaign_state = &mut ctx.accounts.campaign_state;
-
-        campaign_state.fundstarter = ctx.accounts.fundstarter.key();
         require!(
             description.chars().count() <= MAX_DESCRIPTION_SIZE,
             CrowdFundError::DescriptionTooLong
         );
+
+        let campaign_state = &mut ctx.accounts.campaign_state;
+
+        campaign_state.fundstarter = ctx.accounts.fundstarter.key();
         campaign_state.vault = ctx.accounts.vault.key();
         campaign_state.description = description;
         campaign_state.target = target;
         campaign_state.balance = 0;
         campaign_state.token_mint = token_mint;
         campaign_state.status = Status::DonationsOpen.to_u8();
+        campaign_state.voting_account = ctx.accounts.vote_account.key();
         campaign_state.bump = *ctx.bumps.get("campaign_state").unwrap();
+
+        let voting_account = &mut ctx.accounts.vote_account;
+        voting_account.authority = campaign_state.key();
+
         Ok(())
     }
 
@@ -39,6 +45,7 @@ pub mod crowdfunding_platform {
             CrowdFundError::ClosedToDonations
         );
 
+        let donator_account = &mut ctx.accounts.donator_account;
         let campaign_state = &mut ctx.accounts.campaign_state;
         let donating_wallet = ctx.accounts.donator_wallet.to_owned();
         let vault = &mut ctx.accounts.vault.to_owned();
@@ -56,6 +63,9 @@ pub mod crowdfunding_platform {
 
         anchor_spl::token::transfer(cpi_ctx, token_amount)?;
         campaign_state.balance = campaign_state.balance.checked_add(token_amount).unwrap();
+
+        donator_account.address = ctx.accounts.donator.key();
+        donator_account.amount = amount; 
 
         vault.reload()?;
 
@@ -139,6 +149,12 @@ pub struct StartCampaign<'info> {
     )]
     vault: Account<'info, TokenAccount>,
 
+    #[account(
+        init, seeds = [b"voting".as_ref(), fundstarter.key().as_ref()],
+        bump, payer = fundstarter, space = 8 + Vote::SIZE
+    )]
+    vote_account: Account<'info, Vote>,
+
     token_mint: Account<'info, Mint>,
 
     system_program: Program<'info, System>,
@@ -161,6 +177,13 @@ pub struct Donate<'info> {
     )]
     vault: Account<'info, TokenAccount>,
 
+    #[account(
+        init, space = 8 + Donator::SIZE, payer = donator,
+        seeds = [b"donator".as_ref(), campaign_state.key().as_ref(), donator.key().as_ref()],
+        bump
+    )]
+    donator_account: Account<'info, Donator>,
+
     #[account(mut)]
     donator: Signer<'info>,
     /// CHECK: we do not read or write to or from this account
@@ -178,6 +201,7 @@ pub struct Donate<'info> {
     token_program: Program<'info, Token>,
     rent: Sysvar<'info, Rent>,
 }
+
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
@@ -206,6 +230,76 @@ pub struct Withdraw<'info> {
 }
 
 
+#[derive(Accounts)]
+pub struct VoteContext<'info> {
+    #[account(
+        mut, 
+        seeds = [b"donator".as_ref(), campaign_state.key().as_ref(), donator_account.address.as_ref()], 
+        bump
+    )]
+    donator_account: Account<'info, Donator>,
+
+    #[account(
+        mut,
+        seeds=[b"campaign".as_ref(), campaign_state.fundstarter.as_ref()],
+        bump,
+    )]
+    campaign_state: Account<'info, Campaign>,
+
+    #[account( 
+        mut,
+        seeds = [b"voting".as_ref(), campaign_state.fundstarter.as_ref()],
+        bump,
+        constraint = vote_account.authority == campaign_state.key()
+    )]
+    vote_account: Account<'info, Vote>
+}
+
+
+#[derive(Accounts)]
+pub struct RefundContext<'info> {
+    #[account(
+        mut, 
+        seeds = [b"donator".as_ref(), campaign_state.key().as_ref(), donator_account.address.as_ref()], 
+        bump
+    )]
+    donator_account: Account<'info, Donator>,
+
+    #[account(
+        mut,
+        seeds=[b"campaign".as_ref(), campaign_state.fundstarter.as_ref()],
+        bump,
+    )]
+    campaign_state: Account<'info, Campaign>,
+
+    #[account( 
+        mut,
+        seeds = [b"voting".as_ref(), campaign_state.fundstarter.as_ref()],
+        bump,
+        constraint = vote_account.authority == campaign_state.key()
+    )]
+    vote_account: Account<'info, Vote>
+}
+
+#[account]
+pub struct Vote {
+    authority: Pubkey,
+}
+
+impl Vote {
+    const SIZE: usize = 32;
+}
+
+#[account]
+pub struct Donator {
+    address: Pubkey,
+    amount: u64,
+}
+
+impl Donator {
+    const SIZE: usize = 32 + 8;
+}
+
 #[account]
 pub struct Campaign {
     // The user starting a campaign
@@ -223,7 +317,7 @@ pub struct Campaign {
     // The current balance of the user's campaign
     balance: u64,
 
-    // The mint of the token the user is trying to raise
+    // Spl token mint: Could be SOL, USDT, BENE, etc
     token_mint: Pubkey,
 
     // Bump of campaign PDA
@@ -231,12 +325,15 @@ pub struct Campaign {
 
     // Campaign status
     status: u8,
+
+    // TODO: set its authority to the smart contract. Implement as a pda 
+    voting_account: Pubkey,
 }
 
 const MAX_DESCRIPTION_SIZE: usize = 200; 
 
 impl Campaign {
-    const SIZE: usize = (32 * 3) + (MAX_DESCRIPTION_SIZE + 4) + (8 * 2) + (1 * 2); 
+    const SIZE: usize = (32 * 4) + (MAX_DESCRIPTION_SIZE + 4) + (8 * 2) + (1 * 2); 
 }
 
 #[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
@@ -279,3 +376,16 @@ pub enum CrowdFundError {
     #[msg("You tried to donate to a closed campaign")]
     ClosedToDonations,
 }
+
+
+
+// ADD CAMPAIGN END DATE?
+
+// ADD ACCOUNT TO KEEP TRACK OF TOP 5/10 DONATORS(THEY GET TO HAVE A SAY
+// IN THE VOTING PROCESS OF WHETHER OR NOT A CAMPAIGN GOES TO THE NEXT MILESTONE)
+
+// IMPLEMENT VOTING LOGIC
+// ADD DATA TO TRACK MILESTONE 
+
+// IMPLEMENT REFUND AND DONATOR VOTING ENDPOINT. CREATE ACCOUNT TO KEEP TRACK OF DONATIONS
+
