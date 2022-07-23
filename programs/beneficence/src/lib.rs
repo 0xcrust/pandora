@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::token::{Mint, Token, TokenAccount, Transfer};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -32,7 +32,44 @@ pub mod crowdfunding_platform {
         Ok(())
     }
 
+    pub fn donate(ctx: Context<Donate>, amount: u64) -> Result<()> {
+        let current_status = Status::from(ctx.accounts.campaign_state.status)?;
+        require!(
+            current_status == Status::DonationsOpen,
+            CrowdFundError::ClosedToDonations
+        );
+
+        let campaign_state = &mut ctx.accounts.campaign_state;
+        let donating_wallet = ctx.accounts.donator_wallet.to_owned();
+        let vault = &mut ctx.accounts.vault.to_owned();
+        let donator = ctx.accounts.donator.to_owned();
+        let token_program = ctx.accounts.token_program.to_owned();
+        let token_amount = amount;
+
+        let transfer_instruction = Transfer {
+            from: donating_wallet.to_account_info(),
+            to: vault.to_account_info(),
+            authority: donator.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new(token_program.to_account_info(), transfer_instruction);
+
+        anchor_spl::token::transfer(cpi_ctx, token_amount)?;
+        campaign_state.balance = campaign_state.balance.checked_add(token_amount).unwrap();
+
+        vault.reload()?;
+
+        assert_eq!(campaign_state.balance, vault.amount);
+
+        if campaign_state.balance >= campaign_state.target {
+            msg!("campaign goal met!");
+            campaign_state.status = Status::DonationsClosed.to_u8();
+        }
+
+        Ok(())
+    }
 }
+
 
 #[derive(Accounts)]
 pub struct StartCampaign<'info> {
@@ -51,6 +88,65 @@ pub struct StartCampaign<'info> {
     vault: Account<'info, TokenAccount>,
 
     token_mint: Account<'info, Mint>,
+
+    system_program: Program<'info, System>,
+    token_program: Program<'info, Token>,
+    rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct Donate<'info> {
+    #[account(
+        mut, seeds=[b"campaign".as_ref(), fundstarter.key().as_ref()], bump,
+        has_one = fundstarter, has_one = token_mint
+    )]
+    campaign_state: Account<'info, Campaign>,
+
+    #[account(
+        mut,
+        seeds=[b"vault".as_ref(), fundstarter.key().as_ref()],
+        bump
+    )]
+    vault: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    donator: Signer<'info>,
+    /// CHECK: we do not read or write to or from this account
+    fundstarter: AccountInfo<'info>,
+    token_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint=donator_wallet.mint == token_mint.key(),
+        constraint=donator_wallet.owner == donator.key()
+    )]
+    donator_wallet: Account<'info, TokenAccount>,
+
+    system_program: Program<'info, System>,
+    token_program: Program<'info, Token>,
+    rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut, seeds=[b"campaign".as_ref(), fundstarter.key().as_ref()], bump,
+        has_one = fundstarter, has_one = token_mint
+    )]
+    campaign_state: Account<'info, Campaign>,
+
+    #[account(mut, seeds=[b"vault".as_ref(), fundstarter.key().as_ref()], bump)]
+    vault: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    fundstarter: Signer<'info>,
+    token_mint: Account<'info, Mint>,
+
+    #[account(
+        mut, constraint=wallet_to_withdraw_to.mint == token_mint.key(),
+        constraint=wallet_to_withdraw_to.owner == fundstarter.key()
+    )]
+    wallet_to_withdraw_to: Account<'info, TokenAccount>,
 
     system_program: Program<'info, System>,
     token_program: Program<'info, Token>,
