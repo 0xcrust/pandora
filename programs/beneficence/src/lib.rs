@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, CloseAccount};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -19,7 +19,7 @@ pub mod crowdfunding_platform {
 
         campaign_state.fundstarter = ctx.accounts.fundstarter.key();
         require!(
-            description.chars().count() <= MAX_DESCRIPTION_LEN,
+            description.chars().count() <= MAX_DESCRIPTION_SIZE,
             CrowdFundError::DescriptionTooLong
         );
         campaign_state.vault = ctx.accounts.vault.key();
@@ -68,6 +68,58 @@ pub mod crowdfunding_platform {
 
         Ok(())
     }
+
+    pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
+        let campaign_state = &mut ctx.accounts.campaign_state;
+        if Status::from(campaign_state.status)? != Status::CampaignEnded {
+            campaign_state.status = Status::CampaignEnded.to_u8();
+        }
+
+        let fundstarter = ctx.accounts.fundstarter.to_owned();
+        let funds_pot = &mut ctx.accounts.vault.to_owned();
+        let destination_account = ctx.accounts.wallet_to_withdraw_to.to_owned();
+        let token_program = ctx.accounts.token_program.to_owned();
+
+        // We reload to get the amount of tokens in our pot and withdraw all of it
+        funds_pot.reload()?;
+        let amount_to_withdraw = funds_pot.amount;
+
+        let transfer_instruction = Transfer {
+            from: funds_pot.to_account_info(),
+            to: destination_account.to_account_info(),
+            authority: campaign_state.to_account_info(),
+        };
+
+        let state_seeds = &["campaign".as_bytes().as_ref(), fundstarter.key.as_ref(), &[campaign_state.bump]];
+        let signer = &[&state_seeds[..]];
+
+        let cpi_ctx = CpiContext::new(token_program.to_account_info(), transfer_instruction)
+            .with_signer(signer);
+        anchor_spl::token::transfer(cpi_ctx, amount_to_withdraw)?;
+
+        campaign_state.balance = campaign_state
+            .balance
+            .checked_sub(amount_to_withdraw)
+            .unwrap();
+
+        let should_close = {
+            funds_pot.reload()?;
+            funds_pot.amount == 0
+        };
+
+        if should_close {
+            let close_instruction = CloseAccount {
+                account: funds_pot.to_account_info(),
+                destination: fundstarter.to_account_info(),
+                authority: campaign_state.to_account_info(),
+            };
+            let cpi_ctx = CpiContext::new(token_program.to_account_info(), close_instruction)
+                .with_signer(signer);
+            anchor_spl::token::close_account(cpi_ctx)?;
+        }
+
+        Ok(())
+    }
 }
 
 
@@ -77,7 +129,7 @@ pub struct StartCampaign<'info> {
     fundstarter: Signer<'info>,
     #[account(
         init, seeds = [b"campaign".as_ref(), fundstarter.key().as_ref()],
-        bump, payer = fundstarter, space = 8 + Campaign::LEN
+        bump, payer = fundstarter, space = 8 + Campaign::SIZE
     )]
     campaign_state: Account<'info, Campaign>,
 
@@ -168,7 +220,7 @@ pub struct Campaign {
     // The amount of tokens the user is trying to raise
     target: u64,
 
-    // The current balance of the user's fundraising account
+    // The current balance of the user's campaign
     balance: u64,
 
     // The mint of the token the user is trying to raise
@@ -177,14 +229,14 @@ pub struct Campaign {
     // Bump of campaign PDA
     bump: u8,
 
-    // Status of fundraising campaign
+    // Campaign status
     status: u8,
 }
 
-const MAX_DESCRIPTION_LEN: usize = 200; 
+const MAX_DESCRIPTION_SIZE: usize = 200; 
 
 impl Campaign {
-    const LEN: usize= (32 * 3) + (MAX_DESCRIPTION_LEN + 4) + (8 * 2) + (1 * 2); 
+    const SIZE: usize = (32 * 3) + (MAX_DESCRIPTION_SIZE + 4) + (8 * 2) + (1 * 2); 
 }
 
 #[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
