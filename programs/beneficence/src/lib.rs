@@ -1,11 +1,60 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Mint, Token, TokenAccount};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+
 
 #[program]
 pub mod crowdfunding_platform {
     use super::*;
 
+    pub fn start_campaign(
+        ctx: Context<StartCampaign>,
+        description: String,
+        target: u64,
+        token_mint: Pubkey,
+    ) -> Result<()> {
+        require!(target > 0, CrowdFundError::InvalidTarget);
+        let campaign_state = &mut ctx.accounts.campaign_state;
+
+        campaign_state.fundstarter = ctx.accounts.fundstarter.key();
+        require!(
+            description.chars().count() <= MAX_DESCRIPTION_LEN,
+            CrowdFundError::DescriptionTooLong
+        );
+        campaign_state.vault = ctx.accounts.vault.key();
+        campaign_state.description = description;
+        campaign_state.target = target;
+        campaign_state.balance = 0;
+        campaign_state.token_mint = token_mint;
+        campaign_state.status = Status::DonationsOpen.to_u8();
+        campaign_state.bump = *ctx.bumps.get("campaign_state").unwrap();
+        Ok(())
+    }
+
+}
+
+#[derive(Accounts)]
+pub struct StartCampaign<'info> {
+    #[account(mut)]
+    fundstarter: Signer<'info>,
+    #[account(
+        init, seeds = [b"campaign".as_ref(), fundstarter.key().as_ref()],
+        bump, payer = fundstarter, space = 8 + Campaign::LEN
+    )]
+    campaign_state: Account<'info, Campaign>,
+
+    #[account(
+        init, seeds = [b"vault".as_ref(), fundstarter.key().as_ref()], bump,
+        payer = fundstarter, token::mint = token_mint, token::authority = campaign_state
+    )]
+    vault: Account<'info, TokenAccount>,
+
+    token_mint: Account<'info, Mint>,
+
+    system_program: Program<'info, System>,
+    token_program: Program<'info, Token>,
+    rent: Sysvar<'info, Rent>,
 }
 
 
@@ -36,9 +85,10 @@ pub struct Campaign {
     status: u8,
 }
 
+const MAX_DESCRIPTION_LEN: usize = 200; 
 
 impl Campaign {
-    const LEN: usize= (32 * 3) + (200 + 4) + (8 * 2) + (1 * 2); 
+    const LEN: usize= (32 * 3) + (MAX_DESCRIPTION_LEN + 4) + (8 * 2) + (1 * 2); 
 }
 
 #[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
