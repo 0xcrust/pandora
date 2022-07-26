@@ -4,9 +4,6 @@ use anchor_spl::token::{CloseAccount, Mint, Token, TokenAccount, Transfer};
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 
-
-const ADMIN_ADDRESS: &str = "75Anj2RvhC5j8b2DniGoPSotBcst88fMt6Yo8xLATYJA";
-const VAULT: &str = "75Anj2RvhC5j8b2DniGoPSotBcst88fMt6Yo8xLATYJA";
 const NATIVE_TOKEN_MINT: &str = "75Anj2RvhC5j8b2DniGoPSotBcst88fMt6Yo8xLATYJA";
 
 
@@ -14,19 +11,6 @@ const NATIVE_TOKEN_MINT: &str = "75Anj2RvhC5j8b2DniGoPSotBcst88fMt6Yo8xLATYJA";
 pub mod crowdfunding_platform {
 
     use super::*;
-    /*
-    pub struct Beneficence {
-        pub nonce: u8,
-        pub signer: Pubkey,
-        pub admin: Pubkey,
-        pub native_token_mint: Pubkey,
-        pub donation_fee: u64,
-        pub voting_period: i64,
-        pub minimum_required_vote: u64,
-        pub active_stakers: u8,
-        pub staking_initialized: bool,
-        pub stake_vault
-    }*/
 
     pub fn start_campaign(
         ctx: Context<StartCampaign>,
@@ -153,7 +137,7 @@ pub mod crowdfunding_platform {
         voting_account.donators_voted = voting_account.donators_voted.checked_add(1).unwrap();
 
         let donator = &mut ctx.accounts.donator_account;
-        let vote_weight = donator.amount;
+        // let vote_weight = donator.amount;
         // continue_votes + terminate_votes == total amount donated by those who voted
         // Results in percentage = continue_votes / total amount of donators that voted
 
@@ -722,6 +706,20 @@ impl CampaignStatus {
             CampaignStatus::CampaignEnded => 3,
         }
     }
+}
+
+#[account]
+#[derive(Default)]
+pub struct Config {
+    pub nonce: u8,
+    pub signer: Pubkey,
+    pub admin: Pubkey,
+    pub native_token_mint: Pubkey,
+    pub donation_fee: u64,
+    pub voting_period: i64,
+    pub minimum_required_vote: u64,
+    pub active_stakers: u8,
+    pub staking_initialized: bool,   
 }
 
 #[error_code]
