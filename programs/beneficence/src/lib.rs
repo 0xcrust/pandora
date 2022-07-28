@@ -3,14 +3,30 @@ use anchor_spl::token::{CloseAccount, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
+const DAY_IN_SECONDS: u64 = 60 * 60 * 24;
 
 #[program]
 pub mod crowdfunding_platform {
 
     use super::*;
 
-    pub fn initialize_beneficence(_ctx: Context<Initialize>) -> Result<()> {
-        msg!("lol");
+    pub fn initialize_beneficence(ctx: Context<Initialize>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        
+        config.admin = ctx.accounts.authority.key();
+        config.native_token_mint = ctx.accounts.native_token_mint.key();
+        config.donation_fee = 0;
+        config.staking_initialized = false;
+        config.active_stakers = 0;
+        config.total_amount_staked = 0;
+        config.round_voting_period_in_days = 1;
+        config.minimum_required_vote_percentage = 30;
+        config.donator_voting_rights = 60;
+        config.staker_voting_rights = 40;
+        config.staker_moderation_rights = 100;
+        config.staking_pool = Pubkey::default();
+        config.bump = *ctx.bumps.get("config").unwrap();
+
         Ok(())
     }
 
@@ -29,7 +45,7 @@ pub mod crowdfunding_platform {
         );
         require!(
             initial_target <= target,
-            ErrorCode::RoundTargetExceedsCampaignLimits
+            ErrorCode::CantExceedCampaignTarget
         );
 
         let campaign = &mut ctx.accounts.campaign;
@@ -37,19 +53,22 @@ pub mod crowdfunding_platform {
         campaign.vault = ctx.accounts.vault.key();
         campaign.description = description;
         campaign.target = target;
+        campaign.cid = cid;
         campaign.balance = 0;
         campaign.token_mint = ctx.accounts.token_mint.key();
         campaign.status = CampaignStatus::CampaignActive.to_u8();
+        campaign.can_start_next_round = false;
         campaign.total_rounds = number_of_funding_rounds;
         campaign.active_round = 1;
-        campaign.can_start_next_round = false;
         campaign.active_round_address = ctx.accounts.round.key();
-        campaign.cid = cid;
+        campaign.is_valid_votes = 0;
+        campaign.not_valid_votes = 0;
+        campaign.moderator_votes = 0;
+        campaign.is_valid_campaign = true;
         campaign.bump = *ctx.bumps.get("campaign").unwrap();
 
-        
         let round = &mut ctx.accounts.round;
-        round.voting_account = Pubkey::default();
+        round.round_votes = Pubkey::default();
         round.round = 1;
         round.target = initial_target;
         round.balance = 0;
@@ -113,75 +132,111 @@ pub mod crowdfunding_platform {
     }
 
     pub fn initialize_voting(ctx: Context<InitializeVoting>) -> Result<()> {
-        let voting_account = &mut ctx.accounts.voting_account;
-        voting_account.continue_campaign_votes = 0;
-        voting_account.terminate_campaign_votes = 0;
-        voting_account.voters = 0;
-        voting_account.voting_ended = false;
+        let clock = clock::Clock::get().unwrap();
+        let round_votes = &mut ctx.accounts.round_votes;
+        round_votes.continue_campaign = 0;
+        round_votes.terminate_campaign = 0;
+        round_votes.donators_voted = 0;
+        round_votes.stakers_voted = 0;
+        round_votes.start_time = clock.unix_timestamp;
+        round_votes.voting_ended = false;
 
         let round = &mut ctx.accounts.round;
-        round.voting_account = ctx.accounts.voting_account.key();
+        round.round_votes = ctx.accounts.round_votes.key();
         Ok(())
     }
 
     pub fn vote(ctx: Context<VoteNextRound>, continue_campaign: bool) -> Result<()> {
-        let campaign_status = CampaignStatus::from(ctx.accounts.campaign.status)?;
-        let round_status = RoundStatus::from(ctx.accounts.round.status)?;
+        let campaign_status = ctx.accounts.campaign.status;
+        let round_status = ctx.accounts.round.status;
         require!(
-            campaign_status == CampaignStatus::CampaignActive,
+            campaign_status == CampaignStatus::CampaignActive.to_u8(),
             ErrorCode::CampaignInactive
         );
-        require!(
-            round_status == RoundStatus::RoundTargetMet,
-            ErrorCode::StartedVoteWithoutTargetMet
-        );
+        require_eq!(round_status, RoundStatus::RoundTargetMet.to_u8());
 
-        let voting_account = &mut ctx.accounts.voting_account;
+        let round_votes = &mut ctx.accounts.round_votes;
+        let voter = &mut ctx.accounts.voter_account;
 
-        let donator = &mut ctx.accounts.voter_account;
-        // let vote_weight = donator.amount;
-        // continue_votes + terminate_votes == total amount donated by those who voted
-        // Results in percentage = continue_votes / total amount of donators that voted
-
-        // TODO: Let votes count as a factor of the amount a donator donates?
         match continue_campaign {
             true => {
-                // voting_account.continue_votes = 
-                    
-                voting_account.continue_campaign_votes =
-                    voting_account.continue_campaign_votes.checked_add(1).unwrap();
+                round_votes.continue_campaign =
+                    round_votes.continue_campaign
+                    .checked_add(voter.voting_power.into())
+                    .unwrap();
             }
             false => {
-                voting_account.terminate_campaign_votes =
-                    voting_account.terminate_campaign_votes.checked_add(1).unwrap();
+                round_votes.terminate_campaign =
+                    round_votes.terminate_campaign
+                    .checked_add(voter.voting_power.into())
+                    .unwrap();
             }
         }
 
-        donator.has_voted = true;
-        let campaign = &mut ctx.accounts.campaign;
-        let round = &mut ctx.accounts.round;
-
-
-        // TODO: Talk with ShreyJay and decide what qualifies as a valid vote(i.e how
-        // do we know that the vote has been decided?)
-
-        // Do we start voting immediately after the round ends or does the
-        // fundstarter need to withdraw and offer proof of use first?
-        if 1 == 1 {
-            round.status = RoundStatus::RoundEnded.to_u8();
-            voting_account.voting_ended = true;
-            campaign.can_start_next_round = true;
-            todo!("Close voting account and round account?");
+        match VoterType::from(voter.voter_type)? {
+            VoterType::Donator => {
+                round_votes.donators_voted = 
+                    round_votes.donators_voted.checked_add(1).unwrap();
+            },
+            VoterType::Staker => {
+                round_votes.stakers_voted = 
+                    round_votes.stakers_voted.checked_add(1).unwrap();
+            }
         }
+
+        voter.has_voted = true;
 
         Ok(())
     }
+
+    pub fn tally_votes(ctx: Context<CountVotes>) -> Result<()> {
+        let current_time = clock::Clock::get().unwrap().unix_timestamp;
+        let voting_start_time = ctx.accounts.round_votes.start_time;
+        let time_elapsed_in_seconds = current_time - voting_start_time;
+        let voting_period_in_seconds = (ctx.accounts.config.round_voting_period_in_days as u64)
+            .checked_mul(DAY_IN_SECONDS)
+            .unwrap();
+
+        require!(
+            time_elapsed_in_seconds as u64 > voting_period_in_seconds,
+            ErrorCode::VotingStillActive
+        );
+
+        let round_votes = &mut ctx.accounts.round_votes;
+        let maximum_possible_voters = ctx.accounts.config.active_stakers
+            .checked_add(ctx.accounts.round.donators as u64)
+            .unwrap();
+        let voters_this_round = round_votes.stakers_voted
+            .checked_add(round_votes.donators_voted)
+            .unwrap();
+        let minimum_voters_required = (30 as u64)
+            .checked_div(100 as u64)
+            .unwrap()
+            .checked_mul(maximum_possible_voters)
+            .unwrap();
+
+        let round = &mut ctx.accounts.round;
+        let campaign = &mut ctx.accounts.campaign;
+
+        if round_votes.terminate_campaign > round_votes.continue_campaign &&
+             voters_this_round > minimum_voters_required 
+        {
+            campaign.can_start_next_round = false;
+        } else {
+            campaign.can_start_next_round = true;
+        }
+        
+        round.status = RoundStatus::RoundEnded.to_u8();
+        round_votes.voting_ended = true;
+        Ok(())
+    }
+
 
     pub fn start_next_round(ctx: Context<StartNextRound>, target: u64) -> Result<()> {
         let campaign = &mut ctx.accounts.campaign;
         require!(
             campaign.balance + target <= campaign.target,
-            ErrorCode::RoundTargetExceedsCampaignLimits
+            ErrorCode::CantExceedCampaignTarget
         );
 
         campaign.active_round_address = ctx.accounts.round.key();
@@ -189,6 +244,7 @@ pub mod crowdfunding_platform {
         campaign.can_start_next_round = false;
 
         let round = &mut ctx.accounts.round;
+        round.round_votes = Pubkey::default();
         round.round = campaign.active_round;
         round.target = target;
         round.balance = 0;
@@ -251,6 +307,13 @@ pub mod crowdfunding_platform {
         Ok(())
     }
 
+    pub fn initialize_staking(ctx: Context<InitializeStaking>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.staking_initialized = true;
+        config.staking_pool = ctx.accounts.staking_pool.key();
+        Ok(())
+    }
+
     pub fn stake(ctx: Context<Stake>, amount: u64) -> Result<()> {
         let token_program = &ctx.accounts.token_program;
         let clock = clock::Clock::get().unwrap();
@@ -261,54 +324,150 @@ pub mod crowdfunding_platform {
                 token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.staker_token_account.to_account_info(),
-                    to: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.staking_pool.to_account_info(),
                     authority: ctx.accounts.staker.to_account_info(),
                 }
             ),
             amount
         )?;
 
-        stake_account.vault = ctx.accounts.vault.key();
         stake_account.staker = ctx.accounts.staker.key(); 
         stake_account.stake_time = clock.unix_timestamp;
         stake_account.deposit = amount;
         stake_account.reward = 0;
 
+        let config = &mut ctx.accounts.config;
+        config.active_stakers = config.active_stakers
+            .checked_add(1).unwrap();
+        config.total_amount_staked = config.total_amount_staked
+            .checked_add(amount).unwrap();
+
         Ok(())
     }
 
-    pub fn unstake(ctx: Context<Stake>) -> Result<()> {
+    pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+        let config_bump = ctx.accounts.config.bump;
+        let config_seeds = &[
+            "config".as_bytes().as_ref(),
+             &[config_bump]
+        ];
+        let signer = &[&config_seeds[..]];
+        
         anchor_spl::token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from: ctx.accounts.vault.to_account_info(),
+                    from: ctx.accounts.staking_pool.to_account_info(),
                     to: ctx.accounts.staker_token_account.to_account_info(),
-                    authority: ctx.accounts.stake_account.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
                 }
-            ),
+            ).with_signer(signer),
             ctx.accounts.stake_account.deposit
         )?;
-        
-        let staker = ctx.accounts.staker.to_owned();
-        let stake_account_bump = *ctx.bumps.get("stake_account").unwrap();
-        let stake_account_seeds = &[
-            "stake".as_bytes().as_ref(), 
-            staker.key.as_ref(), 
-            &[stake_account_bump]
-        ];
-        let signer = &[&stake_account_seeds[..]];
 
-        anchor_spl::token::close_account(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                CloseAccount {
-                    account: ctx.accounts.vault.to_account_info(),
-                    destination: ctx.accounts.staker.to_account_info(),
-                    authority: ctx.accounts.stake_account.to_account_info()
-                }
-            ).with_signer(signer)
-        )?;
+        let config = &mut ctx.accounts.config;
+        config.active_stakers = config.active_stakers
+            .checked_add(1).unwrap();
+        config.total_amount_staked = config.total_amount_staked
+            .checked_add(ctx.accounts.stake_account.deposit).unwrap();
+
+        Ok(())
+    }
+
+    pub fn init_donator_voting(ctx: Context<DonatorVotingInit>) -> Result<()> {
+
+        let total_donations = ctx.accounts.round.balance;
+        let donation = ctx.accounts.donator_account.amount;
+        let donator_voting_rights = ctx.accounts.config.donator_voting_rights;
+
+        let voting_power = donation
+            .checked_div(total_donations)
+            .unwrap()
+            .checked_mul(donator_voting_rights)
+            .unwrap() as u8;
+
+        let voter_account = &mut ctx.accounts.voter_account;
+        voter_account.voting_power = voting_power;
+        voter_account.has_voted = false;
+        voter_account.voter_type = VoterType::Donator.to_u8();
+
+        Ok(())
+    }
+
+    pub fn init_staker_voting(ctx: Context<StakerVotingInit>) -> Result<()> {
+
+        let staker_deposit = ctx.accounts.stake_account.deposit;
+        let total_amount_staked = ctx.accounts.config.total_amount_staked;
+        let staker_voting_rights = ctx.accounts.config.staker_voting_rights;
+        
+        let voting_power = staker_deposit
+            .checked_div(total_amount_staked)
+            .unwrap()
+            .checked_mul(staker_voting_rights)
+            .unwrap() as u8;
+
+        let voter_account = &mut ctx.accounts.voter_account;
+        voter_account.voting_power = voting_power;
+        voter_account.has_voted = false;
+        voter_account.voter_type = VoterType::Staker.to_u8();
+
+        Ok(())
+    }
+
+    pub fn init_staker_moderation(ctx: Context<StakerModerationInit>) -> Result<()> {
+        let staker_deposit = ctx.accounts.stake_account.deposit;
+        let total_amount_staked = ctx.accounts.config.total_amount_staked;
+        let staker_moderation_rights = ctx.accounts.config.staker_moderation_rights;
+
+        let voting_power = staker_deposit
+            .checked_div(total_amount_staked)
+            .unwrap()
+            .checked_mul(staker_moderation_rights)
+            .unwrap() as u8;
+
+        let moderator_account = &mut ctx.accounts.moderator_account;
+        moderator_account.voting_power = voting_power;
+        moderator_account.has_voted = false;
+        moderator_account.moderator_type = ModeratorType::Staker.to_u8();
+        
+        Ok(())
+    }
+
+    pub fn moderate(ctx: Context<Moderate>, thumbs_up: bool ) -> Result<()> {
+        let campaign = &mut ctx.accounts.campaign;
+        let moderator_account = &mut ctx.accounts.moderator_account;
+
+        match thumbs_up {
+            true => {
+                campaign.is_valid_votes = campaign.is_valid_votes
+                    .checked_add(moderator_account.voting_power)
+                    .unwrap();
+            }
+            false => {
+                campaign.not_valid_votes = campaign.not_valid_votes
+                    .checked_add(moderator_account.voting_power)
+                    .unwrap();
+            }
+        }
+
+        moderator_account.has_voted = true;
+        campaign.moderator_votes = campaign.moderator_votes
+            .checked_add(1).unwrap();
+
+        // at least 30% of all moderators(for now stakers only) must vote
+        // for a campaign to be stopped successfully.
+        let minimum_votes_required = (30 as u64)
+            .checked_div(100 as u64)
+            .unwrap()
+            .checked_mul(ctx.accounts.config.active_stakers)
+            .unwrap();
+        let voters_this_round = campaign.moderator_votes;
+
+        if campaign.not_valid_votes > campaign.is_valid_votes && voters_this_round > minimum_votes_required {
+            campaign.is_valid_campaign = false;
+        } else {
+            campaign.is_valid_campaign = true;
+        }
 
         Ok(())
     }
@@ -321,13 +480,14 @@ pub struct Initialize<'info> {
         init,
         payer = authority,
         space = Config::SIZE,
-        seeds = ["beneficence".as_bytes().as_ref()],
+        seeds = ["config".as_bytes().as_ref()],
         bump 
     )]
     config: Account<'info, Config>,
 
     #[account(mut)]
     authority: Signer<'info>,
+    native_token_mint: Account<'info, Mint>,
     system_program: Program<'info, System>
 }
 
@@ -359,7 +519,7 @@ pub struct StartCampaign<'info> {
     rent: Sysvar<'info, Rent>,
 }
 
-// Called by CPI?
+// Chained with the withdraw endpoint in a transaction? 
 #[derive(Accounts)]
 pub struct InitializeVoting<'info> {
     #[account(
@@ -371,14 +531,13 @@ pub struct InitializeVoting<'info> {
     #[account(
         init, seeds = [b"voting".as_ref(), round.key().as_ref()],
         bump, payer = vault, space = 8 + RoundVote::SIZE,
-        constraint = round.status == RoundStatus::RoundTargetMet.to_u8() @ErrorCode::StartedVoteWithoutTargetMet,
-        constraint = round.voting_account == Pubkey::default() @ErrorCode::VotingAlreadyInitialized,
-        constraint = campaign.active_round != campaign.total_rounds @ErrorCode::CantExceedTotalRound
+        constraint = round.status == RoundStatus::RoundTargetMet.to_u8(),
+        constraint = round.round_votes == Pubkey::default(),
+        constraint = campaign.active_round != campaign.total_rounds @ErrorCode::CantExceedMaxRound
     )]
-    voting_account: Account<'info, RoundVote>,
+    round_votes: Account<'info, RoundVote>,
 
-    /// CHECK: We do not read or write to or from this account
-    fundstarter: UncheckedAccount<'info>,
+    fundstarter: Signer<'info>,
     #[account(mut)]
     round: Account<'info, Round>,
     #[account(mut)]
@@ -386,10 +545,27 @@ pub struct InitializeVoting<'info> {
     system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct CountVotes<'info> {
+    #[account(
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump
+    )]
+    config: Account<'info, Config>,
+
+    #[account(mut,constraint = campaign.active_round_address == round.key())]
+    campaign: Account<'info, Campaign>,
+
+    #[account(has_one = round_votes, constraint = round.status == RoundStatus::RoundTargetMet.to_u8())]
+    round: Account<'info, Round>,
+ 
+    #[account(mut, constraint = round_votes.voting_ended == false @ErrorCode::VotingEnded)]
+    round_votes: Account<'info, RoundVote>,
+}
+
 
 #[derive(Accounts)]
 pub struct StartNextRound<'info> {
-    /// CHECK: We do not write or read from this account
     fundstarter: Signer<'info>,
     #[account(
         mut, seeds = [b"campaign".as_ref(), fundstarter.key().as_ref()],
@@ -403,8 +579,8 @@ pub struct StartNextRound<'info> {
         init,
         seeds = [b"round".as_ref(), campaign.key().as_ref(), &[campaign.active_round + 1]],
         bump, payer = vault, space = 8 + Round::SIZE,
-        constraint = campaign.active_round != campaign.total_rounds @ErrorCode::CantExceedTotalRound,
-        constraint = campaign.can_start_next_round == true @ErrorCode::PermissionToStartNextRoundMissing,
+        constraint = campaign.active_round != campaign.total_rounds @ErrorCode::CantExceedMaxRound,
+        constraint = campaign.can_start_next_round == true @ErrorCode::CantStartNextRound,
     )]
     round: Account<'info, Round>,
     system_program: Program<'info, System>,
@@ -437,8 +613,8 @@ pub struct Donate<'info> {
 
     #[account(
         mut,
-        constraint = donator_wallet.mint == campaign.token_mint @ErrorCode::NonMatchingMints,
-        constraint = donator_wallet.owner == donator.key() @ErrorCode::WalletNotOwnedByDonator,
+        constraint = donator_wallet.mint == campaign.token_mint,
+        constraint = donator_wallet.owner == donator.key()
     )]
     donator_wallet: Account<'info, TokenAccount>,
 
@@ -451,6 +627,7 @@ pub struct Withdraw<'info> {
     #[account(
         mut, seeds=[b"campaign".as_ref(), fundstarter.key().as_ref()], bump = campaign.bump,
         has_one = fundstarter, has_one = token_mint, has_one = vault,
+        constraint = campaign.is_valid_campaign == true
     )]
     campaign: Account<'info, Campaign>,
 
@@ -464,8 +641,8 @@ pub struct Withdraw<'info> {
     token_mint: Account<'info, Mint>,
 
     #[account(
-        mut, constraint = wallet_to_withdraw_to.mint == token_mint.key() @ErrorCode::NonMatchingMints,
-        constraint = wallet_to_withdraw_to.owner == fundstarter.key() @ErrorCode::WalletNotOwnedByDonator,
+        mut, constraint = wallet_to_withdraw_to.mint == token_mint.key(), 
+        constraint = wallet_to_withdraw_to.owner == fundstarter.key()
     )]
     wallet_to_withdraw_to: Account<'info, TokenAccount>,
 
@@ -475,7 +652,13 @@ pub struct Withdraw<'info> {
 
 
 #[derive(Accounts)]
-pub struct InitDonatorVoting<'info> {
+pub struct DonatorVotingInit<'info> {
+    #[account(
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump
+    )]
+    config: Account<'info, Config>,
+
     #[account(mut,constraint = campaign.active_round_address == round.key())]
     campaign: Account<'info, Campaign>,
 
@@ -497,12 +680,18 @@ pub struct InitDonatorVoting<'info> {
         seeds = ["vote".as_bytes().as_ref(), round.key().as_ref(), donator.key().as_ref()],
         bump
     )]
-    donator_vote_account: Account<'info, NextRoundVoter>,
+    voter_account: Account<'info, NextRoundVoter>,
     system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct InitStakerVoting<'info> {
+pub struct StakerVotingInit<'info> {
+    #[account(
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump
+    )]
+    config: Account<'info, Config>,
+
     #[account(mut,constraint = campaign.active_round_address == round.key())]
     campaign: Account<'info, Campaign>,
 
@@ -524,7 +713,7 @@ pub struct InitStakerVoting<'info> {
         seeds = ["vote".as_bytes().as_ref(), round.key().as_ref(), staker.key().as_ref()],
         bump
     )]
-    staker_vote_account: Account<'info, NextRoundVoter>,
+    voter_account: Account<'info, NextRoundVoter>,
     system_program: Program<'info, System>,
 }
 
@@ -533,7 +722,7 @@ pub struct VoteNextRound<'info> {
     #[account(mut,constraint = campaign.active_round_address == round.key())]
     campaign: Account<'info, Campaign>,
 
-    #[account(has_one = voting_account, constraint = round.status == RoundStatus::RoundTargetMet.to_u8())]
+    #[account(has_one = round_votes, constraint = round.status == RoundStatus::RoundTargetMet.to_u8())]
     round: Account<'info, Round>,
 
     #[account(
@@ -546,13 +735,18 @@ pub struct VoteNextRound<'info> {
 
     voter: Signer<'info>,
  
-    #[account(mut, constraint = voting_account.voting_ended == false @ErrorCode::VotingEnded)]
-    voting_account: Account<'info, RoundVote>,
+    #[account(mut, constraint = round_votes.voting_ended == false @ErrorCode::VotingEnded)]
+    round_votes: Account<'info, RoundVote>,
 }
 
-
 #[derive(Accounts)]
-pub struct StakerInitModerator<'info> {
+pub struct StakerModerationInit<'info> {
+    #[account(
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump
+    )]
+    config: Account<'info, Config>,
+
     #[account(constraint = campaign.status != CampaignStatus::CampaignEnded.to_u8())]
     campaign: Account<'info, Campaign>,
 
@@ -578,21 +772,68 @@ pub struct StakerInitModerator<'info> {
 
 #[derive(Accounts)]
 pub struct Moderate<'info> {
-    #[account(mut)]
+    #[account(
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump
+    )]
+    config: Account<'info, Config>,
+    #[account(
+        mut,
+        constraint = campaign.status != CampaignStatus::CampaignEnded.to_u8()
+    )]
     campaign: Account<'info, Campaign>,
     #[account(
         mut,
-        seeds = ["moderator".as_bytes().as_ref(), campaign.key().as_ref(), user.key().as_ref()],
-        bump
+        seeds = ["moderator".as_bytes().as_ref(), campaign.key().as_ref(), moderator.key().as_ref()],
+        bump,
+        constraint = moderator_account.has_voted == false
     )]
     moderator_account: Account<'info, Moderator>,
-    user: Signer<'info>,
+    moderator: Signer<'info>,
+}
 
 
+#[derive(Accounts)]
+pub struct InitializeStaking<'info> {
+    #[account(
+        mut,
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump,
+        has_one = admin,
+        has_one = native_token_mint,
+        constraint = config.staking_initialized == false
+    )]
+    config: Account<'info, Config>,
+    #[account(mut)]
+    admin: Signer<'info>,
+    #[account(
+        init,
+        payer = admin,
+        seeds = ["staking-pool".as_bytes().as_ref()],
+        bump,
+        token::mint = native_token_mint,
+        token::authority = config,
+    )]
+    staking_pool: Account<'info, TokenAccount>,
+    native_token_mint: Account<'info, Mint>,
+
+    system_program: Program<'info, System>,
+    token_program: Program<'info, Token>,
+    rent: Sysvar<'info, Rent>
 }
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
+    #[account(
+        mut,
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump,
+        has_one = staking_pool,
+        constraint = config.staking_initialized == true,
+        constraint = config.native_token_mint == mint.key(),
+    )]
+    config: Account<'info, Config>,
+
     #[account(
         init,
         payer = staker,
@@ -610,18 +851,13 @@ pub struct Stake<'info> {
     staker_token_account: Account<'info, TokenAccount>,
 
     #[account(
-        init,
-        payer = staker,
-        seeds = ["stake-vault".as_bytes().as_ref(), staker.key().as_ref()],
+        seeds = ["staking-pool".as_bytes().as_ref()],
         bump,
-        token::mint = mint,
-        token::authority = stake_account
     )]
-    vault: Account<'info, TokenAccount>,
+    staking_pool: Account<'info, TokenAccount>,
 
     #[account(mut)]
     staker: Signer<'info>,
-    #[account(constraint = mint.key() == NATIVE_TOKEN_MINT.parse::<Pubkey>().unwrap())]
     mint: Account<'info, Mint>,
 
     system_program: Program<'info, System>,
@@ -632,6 +868,14 @@ pub struct Stake<'info> {
 
 #[derive(Accounts)]
 pub struct Unstake<'info> {
+    #[account(
+        mut,
+        seeds = ["config".as_bytes().as_ref()],
+        bump = config.bump,
+        has_one = staking_pool
+    )]
+    config: Account<'info, Config>,
+
     #[account(mut)]
     staker: Signer<'info>,
 
@@ -640,23 +884,26 @@ pub struct Unstake<'info> {
         seeds = ["stake".as_bytes().as_ref(), staker.key().as_ref()],
         bump,
         has_one = staker,
-        has_one = vault,
         close = staker,
     )]
     stake_account: Account<'info, StakeAccount>,
 
-    #[account(mut)]
-    vault: Account<'info, TokenAccount>,
+    #[account(
+        seeds = ["staking-pool".as_bytes().as_ref()],
+        bump,
+    )]
+    staking_pool: Account<'info, TokenAccount>,
 
     #[account(
         mut,
-        constraint = staker_token_account.mint == vault.mint,
+        constraint = staker_token_account.mint == staking_pool.mint,
         constraint = staker_token_account.owner == staker.key(),
     )]
-    staker_token_account: Account<'info, TokenAccount>
+    staker_token_account: Account<'info, TokenAccount>,
+    token_program: Program<'info, Token>
 }
 
-const NATIVE_TOKEN_MINT: &str = "75Anj2RvhC5j8b2DniGoPSotBcst88fMt6Yo8xLATYJA";
+
 #[account]
 pub struct Campaign {
     // The user starting a campaign
@@ -673,8 +920,6 @@ pub struct Campaign {
     balance: u64,
     // Spl token mint: Could be SOL, USDT, BENE, etc
     token_mint: Pubkey,
-    // Bump of campaign PDA
-    bump: u8,
     // Campaign status
     status: u8,
     can_start_next_round: bool,
@@ -685,9 +930,13 @@ pub struct Campaign {
     // Current round account
     active_round_address: Pubkey,
 
-    thumbs_up_votes: u8,
-    thumbs_down_votes: u8,
+    is_valid_votes: u8,
+    not_valid_votes: u8,
+    // the number of moderators that have exercised their voting right so far
+    moderator_votes: u64,
     is_valid_campaign: bool,
+    // Bump of campaign PDA
+    bump: u8,
 }
 
 const MAX_DESCRIPTION_SIZE: usize = 200;
@@ -698,7 +947,7 @@ impl Campaign {
 #[account]
 pub struct Round {
     // Associated voting account
-    voting_account: Pubkey,
+    round_votes: Pubkey,
     // What round of rounds
     round: u8,
     // target for this round
@@ -718,10 +967,17 @@ impl Round {
 
 #[account]
 pub struct RoundVote {
-    // Checked before starting next_round
-    continue_campaign_votes: u8,
-    terminate_campaign_votes: u8,
-    voters: u8,
+    // continue campaign votes
+    continue_campaign: u64,
+    // terminate campaign votes
+    terminate_campaign: u64,
+    
+    // number of donators that voted
+    donators_voted: u64,
+    // number of stakers that voted
+    stakers_voted: u64,
+
+    start_time: i64,
     voting_ended: bool,
 }
 
@@ -742,7 +998,6 @@ impl Donator {
 
 #[account]
 pub struct StakeAccount {
-    vault: Pubkey,
     staker: Pubkey,
     stake_time: i64,
     deposit: u64,
@@ -755,22 +1010,73 @@ impl StakeAccount {
 
 #[account]
 pub struct NextRoundVoter {
-    voting_power: u64,
-    has_voted: bool
+    voting_power: u8,
+    has_voted: bool,
+    voter_type: u8,
 }
 
 impl NextRoundVoter {
     const SIZE: usize = 8 + 1;
 }
 
+#[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
+pub enum VoterType {
+    Staker,
+    Donator,
+}
+
+impl VoterType {
+    fn from(val: u8) -> std::result::Result<VoterType, Error> {
+        match val {
+            1 => Ok(VoterType::Donator),
+            2 => Ok(VoterType::Staker),
+            invalid_number => {
+                msg!("Invalid voter type: {}", invalid_number);
+                Err(ErrorCode::InvalidVoterType.into())
+            }
+        }
+    }
+
+    fn to_u8(&self) -> u8 {
+        match self {
+            VoterType::Donator => 1,
+            VoterType::Staker => 2,
+        }
+    }
+}
+
 #[account]
 pub struct Moderator {
-    voting_power: u64,
-    has_voted: bool
+    voting_power: u8,
+    has_voted: bool,
+    moderator_type: u8,
 }
 
 impl Moderator {
     const SIZE: usize = 8 + 1;
+}
+
+#[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
+pub enum ModeratorType {
+    Staker
+}
+
+impl ModeratorType {
+    fn from(val: u8) -> std::result::Result<ModeratorType, Error> {
+        match val {
+            1 => Ok(ModeratorType::Staker),
+            invalid_number => {
+                msg!("Invalid moderator type: {}", invalid_number);
+                Err(ErrorCode::InvalidModeratorType.into())
+            }
+        }
+    }
+
+    fn to_u8(&self) -> u8 {
+        match self {
+            ModeratorType::Staker => 1,
+        }
+    }
 }
 
 
@@ -835,15 +1141,19 @@ impl CampaignStatus {
 #[account]
 #[derive(Default)]
 pub struct Config {
-    nonce: u8,
-    signer: Pubkey,
     admin: Pubkey,
     native_token_mint: Pubkey,
     donation_fee: u64,
-    voting_period: i64,
-    minimum_required_vote: u64,
-    active_stakers: u8,
     staking_initialized: bool,   
+    active_stakers: u64,
+    total_amount_staked: u64,
+    round_voting_period_in_days: u8,
+    minimum_required_vote_percentage: u64,
+    donator_voting_rights: u64,
+    staker_voting_rights: u64,
+    staker_moderation_rights: u64,
+    staking_pool: Pubkey,
+    bump: u8,
 }
 
 impl Config {
@@ -861,31 +1171,23 @@ pub enum ErrorCode {
     #[msg("You tried to donate to an inactive campaign")]
     CampaignInactive,
     #[msg("No go ahead to start the next round")]
-    PermissionToStartNextRoundMissing,
-    #[msg("You can't exceed the predetermined number of funding rounds")]
-    CantExceedTotalRound,
-    #[msg("Wrong ATA mint")]
-    NonMatchingMints,
-    #[msg("Wallet not owned by signer")]
-    WalletNotOwnedByDonator,
-    #[msg("Signer doesn't have a donator account for this round")]
-    InvalidDonator,
-    #[msg("Attempt to make a duplicate vote by the same donator")]
-    AlreadyVoted,
-    #[msg("Setting this round target would exceed the target set for the entire campaign")]
-    RoundTargetExceedsCampaignLimits,
+    CantStartNextRound,
+    #[msg("You can't exceed the max number of funding rounds")]
+    CantExceedMaxRound,
+    #[msg("Can't exceed campaign target")]
+    CantExceedCampaignTarget,
     #[msg("This round is not accepting donations")]
     RoundClosedToDonations,
-    #[msg("Can't vote till RoundTarget has been met")]
-    StartedVoteWithoutTargetMet,
-    #[msg("Voting account already exists for this round")]
-    VotingAlreadyInitialized,
     #[msg("Voting period has ended")]
     VotingEnded,
+    #[msg("Invalid voter type")]
+    InvalidVoterType,
+    #[msg("Invalid moderator type ")]
+    InvalidModeratorType,
+    #[msg("Can't tally votes while voting is still active")]
+    VotingStillActive
 }
 
 
 
-
-// make people create voting accounts before they can vote. more expensive?
-// 
+// Validate all bump seeds
