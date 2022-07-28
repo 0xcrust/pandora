@@ -1,12 +1,12 @@
 use anchor_lang::{prelude::*, solana_program::clock};
 use anchor_spl::token::{CloseAccount, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("CSMudVMN7Nc4BvGgtWc4ZkYXaM91iifFHqdBFUPJUpGG");
 
 const DAY_IN_SECONDS: u64 = 60 * 60 * 24;
 
 #[program]
-pub mod crowdfunding_platform {
+pub mod beneficence {
 
     use super::*;
 
@@ -940,8 +940,18 @@ pub struct Campaign {
 }
 
 const MAX_DESCRIPTION_SIZE: usize = 200;
+const CID_SIZE: usize = 50;
+const PUBKEY_SIZE: usize = 32;
+const U8_SIZE: usize = 1;
+const U64_SIZE: usize = 8;
+const BOOL_SIZE: usize = 1;
+
 impl Campaign {
-    const SIZE: usize = (32 * 4) + (MAX_DESCRIPTION_SIZE + 4) + (8 * 3) + (1 * 3);
+    const SIZE: usize = (PUBKEY_SIZE * 4) + (U8_SIZE * 6)
+        +(U64_SIZE * 3)        
+        +(4 + MAX_DESCRIPTION_SIZE)
+        +(4 + CID_SIZE)
+        +(BOOL_SIZE * 2);
 }
 
 #[account]
@@ -961,7 +971,7 @@ pub struct Round {
 }
 
 impl Round {
-    const SIZE: usize = 32 + 8 * 2 + 1 + 1;
+    const SIZE: usize = 32 + 1 + 8 + 8 + 1 + 1;
 }
 
 
@@ -982,7 +992,7 @@ pub struct RoundVote {
 }
 
 impl RoundVote {
-    const SIZE: usize = 8 + 8 + 1 + 8;
+    const SIZE: usize = 8 + 8 + 8 + 8 + 8 + 1;
 }
 
 #[account]
@@ -1005,7 +1015,7 @@ pub struct StakeAccount {
 }
 
 impl StakeAccount {
-    const SIZE: usize = 32 + 8 + 8;
+    const SIZE: usize = 32 + 8 + 8 + 8;
 }
 
 #[account]
@@ -1016,7 +1026,7 @@ pub struct NextRoundVoter {
 }
 
 impl NextRoundVoter {
-    const SIZE: usize = 8 + 1;
+    const SIZE: usize = 1 + 1 + 1;
 }
 
 #[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
@@ -1053,7 +1063,7 @@ pub struct Moderator {
 }
 
 impl Moderator {
-    const SIZE: usize = 8 + 1;
+    const SIZE: usize = 1 + 1 + 1;
 }
 
 #[derive(Clone, Copy, PartialEq, AnchorDeserialize, AnchorSerialize)]
@@ -1157,7 +1167,8 @@ pub struct Config {
 }
 
 impl Config {
-    const SIZE: usize = 2000;
+    const SIZE: usize = (3 * PUBKEY_SIZE) + (7 * U64_SIZE)
+        +(2 * U8_SIZE) + (1 * BOOL_SIZE);
 }
 
 #[error_code]
