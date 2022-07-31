@@ -1,16 +1,18 @@
 use anchor_lang::{prelude::*, solana_program::clock};
 use anchor_spl::token::{CloseAccount, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("CSMudVMN7Nc4BvGgtWc4ZkYXaM91iifFHqdBFUPJUpGG");
+declare_id!("EbrWTmw5NdboUT33KGREWS2wDReubjoa55jCy3ZoDYQD");
 
 const DAY_IN_SECONDS: u64 = 60 * 60 * 24;
+
+
 
 #[program]
 pub mod beneficence {
 
     use super::*;
 
-    pub fn initialize_beneficence(ctx: Context<Initialize>) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let config = &mut ctx.accounts.config;
         
         config.admin = ctx.accounts.authority.key();
@@ -57,7 +59,7 @@ pub mod beneficence {
         campaign.balance = 0;
         campaign.token_mint = ctx.accounts.token_mint.key();
         campaign.status = CampaignStatus::CampaignActive.to_u8();
-        campaign.can_start_next_round = false;
+        campaign.can_start_next_round = true;
         campaign.total_rounds = number_of_funding_rounds;
         campaign.active_round = 1;
         campaign.active_round_address = ctx.accounts.round.key();
@@ -222,9 +224,7 @@ pub mod beneficence {
              voters_this_round > minimum_voters_required 
         {
             campaign.can_start_next_round = false;
-        } else {
-            campaign.can_start_next_round = true;
-        }
+        } 
         
         round.status = RoundStatus::RoundEnded.to_u8();
         round_votes.voting_ended = true;
@@ -241,7 +241,7 @@ pub mod beneficence {
 
         campaign.active_round_address = ctx.accounts.round.key();
         campaign.active_round = campaign.active_round.checked_add(1).unwrap();
-        campaign.can_start_next_round = false;
+        campaign.can_start_next_round = true;
 
         let round = &mut ctx.accounts.round;
         round.round_votes = Pubkey::default();
@@ -479,16 +479,17 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = authority,
-        space = Config::SIZE,
+        space = 8 + Config::SIZE,
         seeds = ["config".as_bytes().as_ref()],
         bump 
     )]
-    config: Account<'info, Config>,
+    config: Box<Account<'info, Config>>,
 
     #[account(mut)]
     authority: Signer<'info>,
     native_token_mint: Account<'info, Mint>,
-    system_program: Program<'info, System>
+    system_program: Program<'info, System>,
+    rent: Sysvar<'info, Rent>
 }
 
 
@@ -508,7 +509,7 @@ pub struct StartCampaign<'info> {
     )]
     vault: Account<'info, TokenAccount>,
     #[account(
-        init, seeds = [b"round".as_ref(), campaign.key().as_ref(), &[1]],
+        init, seeds = [b"round".as_ref(), campaign.key().as_ref(), (1 as u8).to_le_bytes().as_ref()],
         bump, payer = fundstarter, space = 8 + Round::SIZE
     )]
     round: Account<'info, Round>,
@@ -518,6 +519,7 @@ pub struct StartCampaign<'info> {
     token_program: Program<'info, Token>,
     rent: Sysvar<'info, Rent>,
 }
+
 
 // Chained with the withdraw endpoint in a transaction? 
 #[derive(Accounts)]
@@ -577,7 +579,7 @@ pub struct StartNextRound<'info> {
 
     #[account(
         init,
-        seeds = [b"round".as_ref(), campaign.key().as_ref(), &[campaign.active_round + 1]],
+        seeds = [b"round".as_ref(), campaign.key().as_ref(), ((campaign.active_round + 1) as u64).to_le_bytes().as_ref()],
         bump, payer = vault, space = 8 + Round::SIZE,
         constraint = campaign.active_round != campaign.total_rounds @ErrorCode::CantExceedMaxRound,
         constraint = campaign.can_start_next_round == true @ErrorCode::CantStartNextRound,
@@ -676,8 +678,8 @@ pub struct DonatorVotingInit<'info> {
     #[account(
         init,
         payer = donator,
-        space = NextRoundVoter::SIZE,
-        seeds = ["vote".as_bytes().as_ref(), round.key().as_ref(), donator.key().as_ref()],
+        space = 8 + NextRoundVoter::SIZE,
+        seeds = ["voter".as_bytes().as_ref(), round.key().as_ref(), donator.key().as_ref()],
         bump
     )]
     voter_account: Account<'info, NextRoundVoter>,
@@ -701,7 +703,7 @@ pub struct StakerVotingInit<'info> {
     staker: Signer<'info>,
 
     #[account(
-        seeds = ["stake".as_bytes().as_ref(), staker.key().as_ref()],
+        seeds = ["staker".as_bytes().as_ref(), staker.key().as_ref()],
         bump,
     )]
     stake_account: Account<'info, StakeAccount>,
@@ -709,8 +711,8 @@ pub struct StakerVotingInit<'info> {
     #[account(
         init,
         payer = staker,
-        space = NextRoundVoter::SIZE,
-        seeds = ["vote".as_bytes().as_ref(), round.key().as_ref(), staker.key().as_ref()],
+        space = 8 + NextRoundVoter::SIZE,
+        seeds = ["voter".as_bytes().as_ref(), round.key().as_ref(), staker.key().as_ref()],
         bump
     )]
     voter_account: Account<'info, NextRoundVoter>,
@@ -727,7 +729,7 @@ pub struct VoteNextRound<'info> {
 
     #[account(
         mut,
-        seeds = ["vote".as_bytes().as_ref(), round.key().as_ref(), voter.key().as_ref()],
+        seeds = ["voter".as_bytes().as_ref(), round.key().as_ref(), voter.key().as_ref()],
         bump,
         constraint = voter_account.has_voted == false
     )]
@@ -753,7 +755,7 @@ pub struct StakerModerationInit<'info> {
     #[account(
         init,
         payer = staker,
-        space = Moderator::SIZE,
+        space = 8 + Moderator::SIZE,
         seeds = ["moderator".as_bytes().as_ref(), campaign.key().as_ref(), staker.key().as_ref()],
         bump
     )]
@@ -763,7 +765,7 @@ pub struct StakerModerationInit<'info> {
     staker: Signer<'info>,
 
     #[account(
-        seeds = ["stake".as_bytes().as_ref(), staker.key().as_ref()],
+        seeds = ["staker".as_bytes().as_ref(), staker.key().as_ref()],
         bump,
     )]
     stake_account: Account<'info, StakeAccount>,
@@ -837,8 +839,8 @@ pub struct Stake<'info> {
     #[account(
         init,
         payer = staker,
-        space = StakeAccount::SIZE,
-        seeds = ["stake".as_bytes().as_ref(), staker.key().as_ref()],
+        space = 8 + StakeAccount::SIZE,
+        seeds = ["staker".as_bytes().as_ref(), staker.key().as_ref()],
         bump
     )]
     stake_account: Account<'info, StakeAccount>,
@@ -881,7 +883,7 @@ pub struct Unstake<'info> {
 
     #[account(
         mut,
-        seeds = ["stake".as_bytes().as_ref(), staker.key().as_ref()],
+        seeds = ["staker".as_bytes().as_ref(), staker.key().as_ref()],
         bump,
         has_one = staker,
         close = staker,
@@ -1169,6 +1171,7 @@ pub struct Config {
 impl Config {
     const SIZE: usize = (3 * PUBKEY_SIZE) + (7 * U64_SIZE)
         +(2 * U8_SIZE) + (1 * BOOL_SIZE);
+    //const SIZE: usize = 2000;
 }
 
 #[error_code]
