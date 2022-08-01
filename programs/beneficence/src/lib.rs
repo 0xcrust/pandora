@@ -6,7 +6,6 @@ declare_id!("EbrWTmw5NdboUT33KGREWS2wDReubjoa55jCy3ZoDYQD");
 const DAY_IN_SECONDS: u64 = 60 * 60 * 24;
 
 
-
 #[program]
 pub mod beneficence {
 
@@ -349,6 +348,7 @@ pub mod beneficence {
         let config_bump = ctx.accounts.config.bump;
         let config_seeds = &[
             "config".as_bytes().as_ref(),
+            ctx.accounts.config.admin.as_ref(),
              &[config_bump]
         ];
         let signer = &[&config_seeds[..]];
@@ -383,7 +383,7 @@ pub mod beneficence {
         let voting_power = donation
             .checked_div(total_donations)
             .unwrap()
-            .checked_mul(donator_voting_rights)
+            .checked_mul(donator_voting_rights as u64)
             .unwrap() as u8;
 
         let voter_account = &mut ctx.accounts.voter_account;
@@ -403,7 +403,7 @@ pub mod beneficence {
         let voting_power = staker_deposit
             .checked_div(total_amount_staked)
             .unwrap()
-            .checked_mul(staker_voting_rights)
+            .checked_mul(staker_voting_rights as u64)
             .unwrap() as u8;
 
         let voter_account = &mut ctx.accounts.voter_account;
@@ -422,7 +422,7 @@ pub mod beneficence {
         let voting_power = staker_deposit
             .checked_div(total_amount_staked)
             .unwrap()
-            .checked_mul(staker_moderation_rights)
+            .checked_mul(staker_moderation_rights as u64)
             .unwrap() as u8;
 
         let moderator_account = &mut ctx.accounts.moderator_account;
@@ -480,7 +480,7 @@ pub struct Initialize<'info> {
         init,
         payer = authority,
         space = 8 + Config::SIZE,
-        seeds = ["config".as_bytes().as_ref()],
+        seeds = ["config".as_bytes().as_ref(), authority.key().as_ref()],
         bump 
     )]
     config: Box<Account<'info, Config>>,
@@ -509,7 +509,7 @@ pub struct StartCampaign<'info> {
     )]
     vault: Account<'info, TokenAccount>,
     #[account(
-        init, seeds = [b"round".as_ref(), campaign.key().as_ref(), (1 as u8).to_le_bytes().as_ref()],
+        init, seeds = [b"round".as_ref(), campaign.key().as_ref(), (1 as u64).to_le_bytes().as_ref()],
         bump, payer = fundstarter, space = 8 + Round::SIZE
     )]
     round: Account<'info, Round>,
@@ -519,6 +519,7 @@ pub struct StartCampaign<'info> {
     token_program: Program<'info, Token>,
     rent: Sysvar<'info, Rent>,
 }
+
 
 
 // Chained with the withdraw endpoint in a transaction? 
@@ -549,10 +550,10 @@ pub struct InitializeVoting<'info> {
 
 #[derive(Accounts)]
 pub struct CountVotes<'info> {
-    #[account(
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump
-    )]
+    //#[account(
+    //    seeds = ["config".as_bytes().as_ref()],
+    //    bump = config.bump
+    //)]
     config: Account<'info, Config>,
 
     #[account(mut,constraint = campaign.active_round_address == round.key())]
@@ -592,8 +593,8 @@ pub struct StartNextRound<'info> {
 #[derive(Accounts)]
 pub struct Donate<'info> {
     #[account(
-        mut, seeds=[b"campaign".as_ref(), fundstarter.key().as_ref()], bump = campaign.bump,
-        has_one = fundstarter, has_one = vault, constraint = campaign.active_round_address == round.key()
+        mut, has_one = vault, 
+        constraint = campaign.active_round_address == round.key()
     )]
     campaign: Account<'info, Campaign>,
     vault: Account<'info, TokenAccount>,
@@ -610,8 +611,6 @@ pub struct Donate<'info> {
 
     #[account(mut)]
     donator: Signer<'info>,
-    /// CHECK: We check that it's the same fundstarter in our campaign state
-    fundstarter: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -655,10 +654,10 @@ pub struct Withdraw<'info> {
 
 #[derive(Accounts)]
 pub struct DonatorVotingInit<'info> {
-    #[account(
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump
-    )]
+    //#[account(
+    //    seeds = ["config".as_bytes().as_ref()],
+    //    bump = config.bump
+    //)]
     config: Account<'info, Config>,
 
     #[account(mut,constraint = campaign.active_round_address == round.key())]
@@ -688,10 +687,10 @@ pub struct DonatorVotingInit<'info> {
 
 #[derive(Accounts)]
 pub struct StakerVotingInit<'info> {
-    #[account(
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump
-    )]
+    //#[account(
+    //    seeds = ["config".as_bytes().as_ref()],
+    //    bump = config.bump
+    //)]
     config: Account<'info, Config>,
 
     #[account(mut,constraint = campaign.active_round_address == round.key())]
@@ -743,10 +742,10 @@ pub struct VoteNextRound<'info> {
 
 #[derive(Accounts)]
 pub struct StakerModerationInit<'info> {
-    #[account(
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump
-    )]
+    //#[account(
+    //    seeds = ["config".as_bytes().as_ref()],
+    //    bump = config.bump
+    //)]
     config: Account<'info, Config>,
 
     #[account(constraint = campaign.status != CampaignStatus::CampaignEnded.to_u8())]
@@ -774,10 +773,10 @@ pub struct StakerModerationInit<'info> {
 
 #[derive(Accounts)]
 pub struct Moderate<'info> {
-    #[account(
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump
-    )]
+    //#[account(
+    //    seeds = ["config".as_bytes().as_ref()],
+    //    bump = config.bump
+    //)]
     config: Account<'info, Config>,
     #[account(
         mut,
@@ -799,8 +798,8 @@ pub struct Moderate<'info> {
 pub struct InitializeStaking<'info> {
     #[account(
         mut,
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump,
+        //seeds = ["config".as_bytes().as_ref()],
+        //bump = config.bump,
         has_one = admin,
         has_one = native_token_mint,
         constraint = config.staking_initialized == false
@@ -811,7 +810,7 @@ pub struct InitializeStaking<'info> {
     #[account(
         init,
         payer = admin,
-        seeds = ["staking-pool".as_bytes().as_ref()],
+        seeds = ["staking-pool".as_bytes().as_ref(), config.key().as_ref()],
         bump,
         token::mint = native_token_mint,
         token::authority = config,
@@ -828,8 +827,8 @@ pub struct InitializeStaking<'info> {
 pub struct Stake<'info> {
     #[account(
         mut,
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump,
+        //seeds = ["config".as_bytes().as_ref()],
+        //bump = config.bump,
         has_one = staking_pool,
         constraint = config.staking_initialized == true,
         constraint = config.native_token_mint == mint.key(),
@@ -872,8 +871,8 @@ pub struct Stake<'info> {
 pub struct Unstake<'info> {
     #[account(
         mut,
-        seeds = ["config".as_bytes().as_ref()],
-        bump = config.bump,
+        //seeds = ["config".as_bytes().as_ref()],
+        //bump = config.bump,
         has_one = staking_pool
     )]
     config: Account<'info, Config>,
@@ -891,7 +890,7 @@ pub struct Unstake<'info> {
     stake_account: Account<'info, StakeAccount>,
 
     #[account(
-        seeds = ["staking-pool".as_bytes().as_ref()],
+        seeds = ["staking-pool".as_bytes().as_ref(), config.key().as_ref()],
         bump,
     )]
     staking_pool: Account<'info, TokenAccount>,
@@ -967,13 +966,13 @@ pub struct Round {
     // amount raised this round
     balance: u64,
     // number of donators this round
-    donators: u8,
+    donators: u64,
     // Status
     status: u8,
 }
 
 impl Round {
-    const SIZE: usize = 32 + 1 + 8 + 8 + 1 + 1;
+    const SIZE: usize = 32 + 1 + 8 + 8 + 8 + 1;
 }
 
 
@@ -1160,17 +1159,17 @@ pub struct Config {
     active_stakers: u64,
     total_amount_staked: u64,
     round_voting_period_in_days: u8,
-    minimum_required_vote_percentage: u64,
-    donator_voting_rights: u64,
-    staker_voting_rights: u64,
-    staker_moderation_rights: u64,
+    minimum_required_vote_percentage: u8,
+    donator_voting_rights: u8,
+    staker_voting_rights: u8,
+    staker_moderation_rights: u8,
     staking_pool: Pubkey,
     bump: u8,
 }
 
 impl Config {
-    const SIZE: usize = (3 * PUBKEY_SIZE) + (7 * U64_SIZE)
-        +(2 * U8_SIZE) + (1 * BOOL_SIZE);
+    const SIZE: usize = (3 * PUBKEY_SIZE) + (3 * U64_SIZE)
+        +(6 * U8_SIZE) + (1 * BOOL_SIZE);
     //const SIZE: usize = 2000;
 }
 
