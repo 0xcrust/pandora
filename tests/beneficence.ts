@@ -1,5 +1,5 @@
 import * as anchor from "@project-serum/anchor";
-import { Program, Wallet } from "@project-serum/anchor";
+import { Program, Wallet, AnchorError } from "@project-serum/anchor";
 import { Beneficence } from "../target/types/beneficence";
 import * as spl from "@solana/spl-token";
 import {
@@ -12,9 +12,10 @@ import {
   getRoundPDA,
   createAssociatedTokenAccount,
   mintTokensToWallet,
-  getDonatorAccountPDA
+  getDonatorAccountPDA,
+  getRoundVotesPDA
 } from "./utils";
-import { assert, config } from "chai";
+import { assert, config, expect } from "chai";
 
 describe("beneficence", () => {
   // Configure the client to use the local cluster.
@@ -69,6 +70,10 @@ describe("beneficence", () => {
    assert.equal(configState.bump, configBump);
   });
 
+  it("Simulates staking and unstaking", async () => {
+
+  });
+
   it("Starts and simulates a campaign", async () => {
     let user = anchor.web3.Keypair.generate();
     await airdrop(provider.connection, user, 2);
@@ -80,7 +85,7 @@ describe("beneficence", () => {
     console.log("Starting campaign...");
     let expected_description = "Fund my treatment";
     let expected_target = 550;
-    let expected_number_of_rounds = 4;
+    let expected_number_of_rounds = 2;
     let expected_initial_target = 100;
     let expected_cid = "X45KFLJ2901994LLJLDJJ99488422";
 
@@ -120,22 +125,21 @@ describe("beneficence", () => {
     assert.equal(campaignState.moderatorVotes.toNumber(), 0);
     assert.equal(campaignState.isValidCampaign, true);
 
-    let roundState = await program.account.round.fetch(round1PDA);
-    assert.ok(roundState.roundVotes.equals(anchor.web3.PublicKey.default));
-    assert.equal(roundState.round, 1);
-    assert.equal(roundState.target.toNumber(), expected_initial_target);
-    assert.equal(roundState.balance.toNumber(), 0);
-    assert.equal(roundState.donators.toNumber(), 0);
-    assert.equal(roundState.status, 1);
+    let round1State = await program.account.round.fetch(round1PDA);
+    assert.ok(round1State.roundVotes.equals(anchor.web3.PublicKey.default));
+    assert.equal(round1State.round, 1);
+    assert.equal(round1State.target.toNumber(), expected_initial_target);
+    assert.equal(round1State.balance.toNumber(), 0);
+    assert.equal(round1State.donators.toNumber(), 0);
+    assert.equal(round1State.status, 1);
 
-/*
     async function donate(amount, donator: anchor.web3.Keypair, program, campaign, round, vault)
     : Promise<anchor.web3.PublicKey> {
       await airdrop(program.provider.connection, donator, 1);
       let donatorWallet = await createAssociatedTokenAccount(program, donator, nativeMintAddress);
       await mintTokensToWallet(donatorWallet, amount + 10, admin, nativeMintAddress, nativeMintAuthority, program);
 
-      let [donatorAccountPDA, _] = await getDonatorAccountPDA(program, roundPDA, donator.publicKey);
+      let [donatorAccountPDA, _] = await getDonatorAccountPDA(program, round, donator.publicKey);
 
       await program.methods
         .donate(new anchor.BN(amount))
@@ -152,43 +156,129 @@ describe("beneficence", () => {
 
       console.log(`Donated ${amount} tokens to round`);
       return donatorAccountPDA;  
-    }*/
+    }
 
     // donate 40 tokens
-    let donator = anchor.web3.Keypair.generate();
-    let amount = 30;
-    console.log("aaa");
-    /*
-    let donator1Account = await donate(
-      40,
+    let donator1 = anchor.web3.Keypair.generate();
+    let amount = 40;
+    let donatorAccount1 = await donate(
+      amount,
       donator1,
       program,
       campaignPDA,
-      roundPDA,
+      round1PDA,
       vaultPDA
-    );*/
-    await airdrop(program.provider.connection, donator, 1);
-      let donatorWallet = await createAssociatedTokenAccount(program, donator, nativeMintAddress);
-      await mintTokensToWallet(donatorWallet, amount + 10, admin, nativeMintAddress, nativeMintAuthority, program);
+    );
 
-      let [donatorAccountPDA, _] = await getDonatorAccountPDA(program, round1PDA, donator.publicKey);
+    campaignState = await program.account.campaign.fetch(campaignPDA);
+    assert.equal(campaignState.balance.toNumber(), amount);
+    assert.equal(campaignState.status, 1);
+    
+    round1State = await program.account.round.fetch(round1PDA);
+    assert.equal(round1State.balance.toNumber(), amount);
+    assert.equal(round1State.donators.toNumber(), 1);
+    assert.equal(round1State.status, 1);
 
-      console.log("Starting....");
+    let donatorAccountState1 = await program.account.donator.fetch(donatorAccount1);
+    assert.ok(donatorAccountState1.donator.equals(donator1.publicKey));
+    assert.equal(donatorAccountState1.amount.toNumber(), amount);
+    assert.equal(donatorAccountState1.round, campaignState.activeRound);
+    assert.equal(donatorAccountState1.round, 1);
+
+    // try to initialize voting before round is complete
+    let [round1VotesAccount, _] = await getRoundVotesPDA(program, round1PDA);
+    try {
       await program.methods
-        .donate(new anchor.BN(amount))
-        .accounts({
-          campaign: campaignPDA,
-          vault: vaultPDA,
-          round: round1PDA,
-          donatorAccount: donatorAccountPDA,
-          donator: donator.publicKey,
-          donatorWallet: donatorWallet
-        })
-        .signers([donator])
-        .rpc();
+      .initializeVoting()
+      .accounts({
+        campaign: campaignPDA,
+        roundVotes: round1VotesAccount,
+        fundstarter: user.publicKey,
+        round: round1PDA,
+        vault: vaultPDA,
+      })
+      .signers([user])
+      .rpc();
+      chai.assert(false, "Should fail because round is still active");
 
-      console.log(`Donated ${amount} tokens to round`);
-      //return donatorAccountPDA;
-    console.log("bbb");
+    } catch (_err) {
+      expect(_err).to.be.instanceOf(AnchorError);
+      const err: AnchorError = _err;
+      expect(err.error.errorCode.number).to.equal(2003);
+      expect(err.error.errorCode.code).to.equal("ConstraintRaw");
+      expect(err.program.equals(program.programId)).is.true;
+    }
+
+    // donate 70 tokens
+    let donator2 = anchor.web3.Keypair.generate();
+    amount = 70;
+    let donatorAccount2 = await donate(
+      amount,
+      donator2,
+      program,
+      campaignPDA,
+      round1PDA,
+      vaultPDA
+    );
+
+    campaignState = await program.account.campaign.fetch(campaignPDA);
+    assert.equal(campaignState.balance.toNumber(), 110);
+    assert.equal(campaignState.status, 1);
+    
+    round1State = await program.account.round.fetch(round1PDA);
+    assert.equal(round1State.balance.toNumber(), 110);
+    assert.equal(round1State.donators.toNumber(), 2);
+    assert.equal(round1State.status, 2);
+
+    let donatorAccountState2 = await program.account.donator.fetch(donatorAccount2);
+    assert.ok(donatorAccountState2.donator.equals(donator2.publicKey));
+    assert.equal(donatorAccountState2.amount.toNumber(), amount);
+    assert.equal(donatorAccountState2.round, campaignState.activeRound);
+    assert.equal(donatorAccountState2.round, 1);
+
+    // try to donate 20 tokens
+    try {
+      let failedDonator = anchor.web3.Keypair.generate();
+      amount = 20;
+      let failedDonatorAccount = await donate(
+        amount,
+        failedDonator,
+        program,
+        campaignPDA,
+        round1PDA,
+        vaultPDA
+        );
+      chai.assert(false,  "Should fail due to round target met");
+    } catch (_err) {
+      expect(_err).to.be.instanceOf(AnchorError);
+      const err: AnchorError = _err;
+      expect(err.error.errorCode.number).to.equal(6007);
+      expect(err.error.errorCode.code).to.equal("RoundClosedToDonations");
+      expect(err.program.equals(program.programId)).is.true;
+    }
+    
+    campaignState = await program.account.campaign.fetch(campaignPDA);
+    assert.equal(campaignState.balance.toNumber(), 110);
+    assert.equal(campaignState.status, 1);
+    
+    round1State = await program.account.round.fetch(round1PDA);
+    assert.equal(round1State.balance.toNumber(), 110);
+    assert.equal(round1State.donators.toNumber(), 2);
+    assert.equal(round1State.status, 2);
+
+    // Initialize voting
+    await program.methods
+      .initializeVoting()
+      .accounts({
+        campaign: campaignPDA,
+        roundVotes: round1VotesAccount,
+        fundstarter: user.publicKey,
+        round: round1PDA,
+        vault: vaultPDA,
+      })
+      .signers([user])
+      .rpc();
+
+    campaignState = await program.account.campaign.fetch(campaignPDA);
   });
 });
