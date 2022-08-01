@@ -533,17 +533,17 @@ pub struct InitializeVoting<'info> {
     campaign: Account<'info, Campaign>,
     #[account(
         init, seeds = [b"voting".as_ref(), round.key().as_ref()],
-        bump, payer = vault, space = 8 + RoundVote::SIZE,
+        bump, payer = fundstarter, space = 8 + RoundVote::SIZE,
         constraint = round.status == RoundStatus::RoundTargetMet.to_u8(),
         constraint = round.round_votes == Pubkey::default(),
         constraint = campaign.active_round != campaign.total_rounds @ErrorCode::CantExceedMaxRound
     )]
     round_votes: Account<'info, RoundVote>,
 
+    #[account(mut)]
     fundstarter: Signer<'info>,
     #[account(mut)]
     round: Account<'info, Round>,
-    #[account(mut)]
     vault: Account<'info, TokenAccount>,
     system_program: Program<'info, System>,
 }
@@ -597,6 +597,8 @@ pub struct Donate<'info> {
         constraint = campaign.active_round_address == round.key()
     )]
     campaign: Account<'info, Campaign>,
+
+    #[account(mut)]
     vault: Account<'info, TokenAccount>,
 
     #[account(mut)]
