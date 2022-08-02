@@ -13,7 +13,9 @@ import {
   createAssociatedTokenAccount,
   mintTokensToWallet,
   getDonatorAccountPDA,
-  getRoundVotesPDA
+  getRoundVotesPDA,
+  getStakeAccountPDA,
+  getStakingPoolPDA
 } from "./utils";
 import { assert, config, expect } from "chai";
 
@@ -36,7 +38,7 @@ describe("beneficence", () => {
   it("Initializes application state!", async () => {
    [nativeMintAddress, nativeMintAuthority] = await createTokenMint(provider.connection, admin);
   
-   // Airdrop 200 sol to admin
+   // Airdrop 2 sol to admin
    await airdrop(provider.connection, admin, 2);
    let [configPDA, configBump] = await getConfigPDA(program, admin.publicKey);
 
@@ -47,8 +49,6 @@ describe("beneficence", () => {
        config: configPDA,
        authority: admin.publicKey,
        nativeTokenMint: nativeMintAddress,
-       //systemProgram: anchor.web3.SystemProgram.programId,
-       //rent: anchor.web3.SYSVAR_RENT_PUBKEY
      })
      .signers([admin])
      .rpc();
@@ -70,11 +70,88 @@ describe("beneficence", () => {
    assert.equal(configState.bump, configBump);
   });
 
-  it("Simulates staking and unstaking", async () => {
-
-  });
-
   it("Starts and simulates a campaign", async () => {
+    // Start Beneficence
+    let admin1 = anchor.web3.Keypair.generate();
+
+    [nativeMintAddress, nativeMintAuthority] = await createTokenMint(provider.connection, admin);
+    await airdrop(provider.connection, admin1, 2);
+    let [configPDA, configBump] = await getConfigPDA(program, admin1.publicKey);
+
+    console.log("Initializing...");
+    await program.methods
+      .initialize()
+      .accounts({
+        config: configPDA,
+        authority: admin1.publicKey,
+        nativeTokenMint: nativeMintAddress,
+      })
+      .signers([admin1])
+      .rpc();
+
+    // Initialize and start staking
+    let [stakingPoolPDA, stakingPoolBump] = await getStakingPoolPDA(program, configPDA);
+
+    let configState = await program.account.config.fetch(configPDA);
+    assert.equal(configState.stakingInitialized, false);
+    assert.ok(configState.stakingPool.equals(anchor.web3.PublicKey.default));
+
+    await program.methods
+      .initializeStaking()
+      .accounts({
+        config: configPDA,
+        admin: admin1.publicKey,
+        stakingPool: stakingPoolPDA,
+        nativeTokenMint: nativeMintAddress
+      })
+      .signers([admin1])
+      .rpc();
+
+    configState = await program.account.config.fetch(configPDA);
+    assert.equal(configState.stakingInitialized, true);
+    assert.ok(configState.stakingPool.equals(stakingPoolPDA));
+    
+
+    async function stake (amount) : Promise<[anchor.web3.Keypair, anchor.web3.PublicKey]> {
+      let staker = anchor.web3.Keypair.generate();
+      await airdrop(program.provider.connection, staker, 1);
+      let stakerWallet = await createAssociatedTokenAccount(program, staker, nativeMintAddress);
+      await mintTokensToWallet(stakerWallet, amount + 10, staker, nativeMintAddress, 
+        nativeMintAuthority, program);
+      let [stakeAccount, _] = await getStakeAccountPDA(program, staker.publicKey);
+      
+      await program.methods
+        .stake(new anchor.BN(amount))
+        .accounts({
+          config: configPDA,
+          stakeAccount: stakeAccount,
+          stakerTokenAccount: stakerWallet,
+          stakingPool: stakingPoolPDA,
+          staker: staker.publicKey,
+          mint: nativeMintAddress
+        })
+        .signers([staker])
+        .rpc();
+      
+      let stakeAccountState = await program.account.stakeAccount.fetch(stakeAccount);
+      assert.ok(stakeAccountState.staker.equals(staker.publicKey));
+      assert.equal(stakeAccountState.deposit.toNumber(), amount);
+      assert.equal(stakeAccountState.reward.toNumber(), 0);
+      
+      return [staker, stakeAccount];
+    }
+
+    let [staker1, stakeAccount1] = await stake(40);
+    let [staker2, stakeAccount2] = await stake(30);
+    let [staker3, stakeAccount3] = await stake(20);
+    let [staker4, stakeAccount4] = await stake(50);
+    let [staker5, stakeAccount5] = await stake(60);
+
+    configState = await program.account.config.fetch(configPDA);
+    assert.equal(configState.activeStakers.toNumber(), 5);
+    assert.equal(configState.totalAmountStaked.toNumber(), 200);
+
+    // User starts a campaign
     let user = anchor.web3.Keypair.generate();
     await airdrop(provider.connection, user, 2);
 
@@ -137,7 +214,8 @@ describe("beneficence", () => {
     : Promise<anchor.web3.PublicKey> {
       await airdrop(program.provider.connection, donator, 1);
       let donatorWallet = await createAssociatedTokenAccount(program, donator, nativeMintAddress);
-      await mintTokensToWallet(donatorWallet, amount + 10, admin, nativeMintAddress, nativeMintAuthority, program);
+      await mintTokensToWallet(donatorWallet, amount + 10, donator, nativeMintAddress, 
+        nativeMintAuthority, program);
 
       let [donatorAccountPDA, _] = await getDonatorAccountPDA(program, round, donator.publicKey);
 
@@ -149,13 +227,14 @@ describe("beneficence", () => {
           round: round,
           donatorAccount: donatorAccountPDA,
           donator: donator.publicKey,
-          donatorWallet: donatorWallet
+          donatorTokenAccount: donatorWallet
         })
         .signers([donator])
         .rpc();
 
       console.log(`Donated ${amount} tokens to round`);
-      return donatorAccountPDA;  
+
+      return donatorAccountPDA;
     }
 
     // donate 40 tokens
@@ -186,7 +265,7 @@ describe("beneficence", () => {
     assert.equal(donatorAccountState1.round, 1);
 
     // try to initialize voting before round is complete
-    let [round1VotesAccount, _] = await getRoundVotesPDA(program, round1PDA);
+    let [round1VotesAccount, round1VotesBump] = await getRoundVotesPDA(program, round1PDA);
     try {
       await program.methods
       .initializeVoting()
@@ -265,6 +344,7 @@ describe("beneficence", () => {
     assert.equal(round1State.balance.toNumber(), 110);
     assert.equal(round1State.donators.toNumber(), 2);
     assert.equal(round1State.status, 2);
+
 
     // Initialize voting
     await program.methods

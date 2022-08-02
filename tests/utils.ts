@@ -201,7 +201,7 @@ export const getStakingPoolPDA = async(program, configAddress: anchor.web3.Publi
 }
   
 
-  // stakeAccountPDA
+// stakeAccountPDA
 export const getStakeAccountPDA = async(program, stakerAddress: anchor.web3.PublicKey)
 : Promise<[anchor.web3.PublicKey, number]> => {
     let pda: anchor.web3.PublicKey;
