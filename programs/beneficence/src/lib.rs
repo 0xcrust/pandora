@@ -94,7 +94,7 @@ pub mod beneficence {
         let round = &mut ctx.accounts.round;
         let donator_account = &mut ctx.accounts.donator_account;
         let campaign = &mut ctx.accounts.campaign;
-        let donating_wallet = ctx.accounts.donator_wallet.to_owned();
+        let donating_wallet = ctx.accounts.donator_token_account.to_owned();
         let vault = &mut ctx.accounts.vault.to_owned();
         let donator = ctx.accounts.donator.to_owned();
         let token_program = ctx.accounts.token_program.to_owned();
@@ -616,10 +616,10 @@ pub struct Donate<'info> {
 
     #[account(
         mut,
-        constraint = donator_wallet.mint == campaign.token_mint,
-        constraint = donator_wallet.owner == donator.key()
+        constraint = donator_token_account.mint == campaign.token_mint,
+        constraint = donator_token_account.owner == donator.key()
     )]
-    donator_wallet: Account<'info, TokenAccount>,
+    donator_token_account: Account<'info, TokenAccount>,
 
     system_program: Program<'info, System>,
     token_program: Program<'info, Token>,
@@ -853,10 +853,11 @@ pub struct Stake<'info> {
     )]
     staker_token_account: Account<'info, TokenAccount>,
 
-    #[account(
-        seeds = ["staking-pool".as_bytes().as_ref()],
-        bump,
-    )]
+    //#[account(
+    //    seeds = ["staking-pool".as_bytes().as_ref(), config.key().as_ref()],
+    //    bump,
+    //)]
+    #[account(mut)]
     staking_pool: Account<'info, TokenAccount>,
 
     #[account(mut)]
@@ -891,10 +892,11 @@ pub struct Unstake<'info> {
     )]
     stake_account: Account<'info, StakeAccount>,
 
-    #[account(
-        seeds = ["staking-pool".as_bytes().as_ref(), config.key().as_ref()],
-        bump,
-    )]
+    //#[account(
+    //    seeds = ["staking-pool".as_bytes().as_ref(), config.key().as_ref()],
+    //    bump,
+    //)]
+    #[account(mut)]
     staking_pool: Account<'info, TokenAccount>,
 
     #[account(
