@@ -1235,6 +1235,4 @@ pub enum ErrorCode {
     RoundHasntEnded,
 }
 
-
-
-// Validate all bump seeds
+// Validate bump seeds

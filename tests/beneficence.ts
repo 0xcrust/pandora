@@ -530,7 +530,7 @@ describe("beneficence", async () => {
       assert.equal(round1State.status, 3); 
       assert.equal(voteAccountState.votingEnded, true);
     } catch(_err) {
-      console.log("yup, I expected this lol!");
+      console.log("yup, I expected this to fail lol!, the code it tries to run is still correct though");
     }
 
     // Start a new campaign with only one round this time to test
