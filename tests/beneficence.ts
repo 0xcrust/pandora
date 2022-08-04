@@ -5,7 +5,6 @@ import * as spl from "@solana/spl-token";
 import {
   createTokenMint,
   airdrop,
-  mintToAccount,
   getConfigPDA,
   getCampaignPDA,
   getVaultPDA,
@@ -15,11 +14,14 @@ import {
   getDonatorAccountPDA,
   getRoundVotesPDA,
   getStakeAccountPDA,
-  getStakingPoolPDA
+  getStakingPoolPDA,
+  getVoterAccountPDA,
+  getModeratorAccountPDA
 } from "./utils";
 import { assert, config, expect } from "chai";
+import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 
-describe("beneficence", () => {
+describe("beneficence", async () => {
   // Configure the client to use the local cluster.
   //const provider = anchor.AnchorProvider.env();
   const provider = anchor.AnchorProvider.local();
@@ -28,10 +30,7 @@ describe("beneficence", () => {
   const program = anchor.workspace.Beneficence as Program<Beneficence>;
 
   const admin = anchor.web3.Keypair.generate();
-  //const admin = (provider.wallet as Wallet).payer;
-
-  let configPDA: anchor.web3.PublicKey;
-  let configBump: number;
+  let [configPDA, configBump] = await getConfigPDA(program);
   let nativeMintAddress: anchor.web3.PublicKey;
   let nativeMintAuthority: anchor.web3.Keypair;
 
@@ -39,8 +38,8 @@ describe("beneficence", () => {
    [nativeMintAddress, nativeMintAuthority] = await createTokenMint(provider.connection, admin);
   
    // Airdrop 2 sol to admin
-   await airdrop(provider.connection, admin, 2);
-   let [configPDA, configBump] = await getConfigPDA(program, admin.publicKey);
+   await airdrop(provider.connection, admin, 4);
+   let [configPDA, configBump] = await getConfigPDA(program);
 
    console.log("Initializing...");
    await program.methods
@@ -70,25 +69,7 @@ describe("beneficence", () => {
    assert.equal(configState.bump, configBump);
   });
 
-  it("Starts and simulates a campaign", async () => {
-    // Start Beneficence
-    let admin1 = anchor.web3.Keypair.generate();
-
-    [nativeMintAddress, nativeMintAuthority] = await createTokenMint(provider.connection, admin);
-    await airdrop(provider.connection, admin1, 2);
-    let [configPDA, configBump] = await getConfigPDA(program, admin1.publicKey);
-
-    console.log("Initializing...");
-    await program.methods
-      .initialize()
-      .accounts({
-        config: configPDA,
-        authority: admin1.publicKey,
-        nativeTokenMint: nativeMintAddress,
-      })
-      .signers([admin1])
-      .rpc();
-
+  it("Simulates a campaign", async () => {
     // Initialize and start staking
     let [stakingPoolPDA, stakingPoolBump] = await getStakingPoolPDA(program, configPDA);
 
@@ -100,11 +81,11 @@ describe("beneficence", () => {
       .initializeStaking()
       .accounts({
         config: configPDA,
-        admin: admin1.publicKey,
+        admin: admin.publicKey,
         stakingPool: stakingPoolPDA,
         nativeTokenMint: nativeMintAddress
       })
-      .signers([admin1])
+      .signers([admin])
       .rpc();
 
     configState = await program.account.config.fetch(configPDA);
@@ -134,7 +115,6 @@ describe("beneficence", () => {
         .rpc();
       
       let stakeAccountState = await program.account.stakeAccount.fetch(stakeAccount);
-      assert.ok(stakeAccountState.staker.equals(staker.publicKey));
       assert.equal(stakeAccountState.deposit.toNumber(), amount);
       assert.equal(stakeAccountState.reward.toNumber(), 0);
       
@@ -219,6 +199,13 @@ describe("beneficence", () => {
 
       let [donatorAccountPDA, _] = await getDonatorAccountPDA(program, round, donator.publicKey);
 
+      let initialCampaignState = await program.account.campaign.fetch(campaign);
+      let initialCampaignBalance = initialCampaignState.balance.toNumber();
+
+      let initialRoundState = await program.account.round.fetch(round);
+      let initialRoundBalance = initialRoundState.balance.toNumber();
+      let initialRoundDonators = initialRoundState.donators.toNumber();
+
       await program.methods
         .donate(new anchor.BN(amount))
         .accounts({
@@ -233,6 +220,22 @@ describe("beneficence", () => {
         .rpc();
 
       console.log(`Donated ${amount} tokens to round`);
+
+      let updatedCampaignState = await program.account.campaign.fetch(campaign);
+      let updatedCampaignBalance = updatedCampaignState.balance.toNumber();
+
+      let updatedRoundState = await program.account.round.fetch(round);
+      let updatedRoundBalance = updatedRoundState.balance.toNumber();
+      let updatedRoundDonators = updatedRoundState.donators.toNumber();
+
+      assert.equal(updatedCampaignBalance, initialCampaignBalance + amount);
+      assert.equal(updatedRoundBalance, initialRoundBalance + amount);
+      assert.equal(updatedRoundDonators, initialRoundDonators + 1);
+
+      let donatorAccountState1 = await program.account.donator.fetch(donatorAccountPDA);
+      assert.equal(donatorAccountState1.amount.toNumber(), amount);
+      assert.equal(donatorAccountState1.round, updatedCampaignState.activeRound);
+      assert.equal(donatorAccountState1.round, updatedRoundState.round);
 
       return donatorAccountPDA;
     }
@@ -250,19 +253,10 @@ describe("beneficence", () => {
     );
 
     campaignState = await program.account.campaign.fetch(campaignPDA);
-    assert.equal(campaignState.balance.toNumber(), amount);
     assert.equal(campaignState.status, 1);
-    
     round1State = await program.account.round.fetch(round1PDA);
-    assert.equal(round1State.balance.toNumber(), amount);
-    assert.equal(round1State.donators.toNumber(), 1);
     assert.equal(round1State.status, 1);
 
-    let donatorAccountState1 = await program.account.donator.fetch(donatorAccount1);
-    assert.ok(donatorAccountState1.donator.equals(donator1.publicKey));
-    assert.equal(donatorAccountState1.amount.toNumber(), amount);
-    assert.equal(donatorAccountState1.round, campaignState.activeRound);
-    assert.equal(donatorAccountState1.round, 1);
 
     // try to initialize voting before round is complete
     let [round1VotesAccount, round1VotesBump] = await getRoundVotesPDA(program, round1PDA);
@@ -301,19 +295,10 @@ describe("beneficence", () => {
     );
 
     campaignState = await program.account.campaign.fetch(campaignPDA);
-    assert.equal(campaignState.balance.toNumber(), 110);
     assert.equal(campaignState.status, 1);
-    
     round1State = await program.account.round.fetch(round1PDA);
-    assert.equal(round1State.balance.toNumber(), 110);
-    assert.equal(round1State.donators.toNumber(), 2);
     assert.equal(round1State.status, 2);
 
-    let donatorAccountState2 = await program.account.donator.fetch(donatorAccount2);
-    assert.ok(donatorAccountState2.donator.equals(donator2.publicKey));
-    assert.equal(donatorAccountState2.amount.toNumber(), amount);
-    assert.equal(donatorAccountState2.round, campaignState.activeRound);
-    assert.equal(donatorAccountState2.round, 1);
 
     // try to donate 20 tokens
     try {
@@ -335,16 +320,6 @@ describe("beneficence", () => {
       expect(err.error.errorCode.code).to.equal("RoundClosedToDonations");
       expect(err.program.equals(program.programId)).is.true;
     }
-    
-    campaignState = await program.account.campaign.fetch(campaignPDA);
-    assert.equal(campaignState.balance.toNumber(), 110);
-    assert.equal(campaignState.status, 1);
-    
-    round1State = await program.account.round.fetch(round1PDA);
-    assert.equal(round1State.balance.toNumber(), 110);
-    assert.equal(round1State.donators.toNumber(), 2);
-    assert.equal(round1State.status, 2);
-
 
     // Initialize voting
     await program.methods
@@ -359,6 +334,472 @@ describe("beneficence", () => {
       .signers([user])
       .rpc();
 
-    campaignState = await program.account.campaign.fetch(campaignPDA);
+
+    // Stakers ballot for the ability to cast votes
+    async function stakerBallot(user: anchor.web3.Keypair, userStakeAccount: anchor.web3.PublicKey,
+       round: anchor.web3.PublicKey, campaign: anchor.web3.PublicKey)
+      : Promise<anchor.web3.PublicKey> {
+
+      let staker = user;
+      let stakeAccount = userStakeAccount;
+
+      let [voterAccountPDA, voterAccountBump] = await getVoterAccountPDA(program, round, staker.publicKey);
+      await program.methods
+        .initStakerVoting()
+        .accounts({
+          config: configPDA,
+          campaign: campaign,
+          round: round,
+          staker: staker.publicKey,
+          stakeAccount: stakeAccount,
+          voterAccount: voterAccountPDA
+        })
+        .signers([staker])
+        .rpc();
+    
+      let configState = await program.account.config.fetch(configPDA);
+      let voterAccountState = await program.account.nextRoundVoter.fetch(voterAccountPDA);
+      let stakerAccountState = await program.account.stakeAccount.fetch(stakeAccount);
+      
+      let deposit = stakerAccountState.deposit.toNumber();
+      let totalStake = configState.totalAmountStaked.toNumber();
+      let stakerRights = configState.stakerVotingRights;
+      let expected_voting_power = Math.trunc((deposit / totalStake) * stakerRights);
+
+      assert.equal(voterAccountState.votingPower, expected_voting_power);
+      assert.equal(voterAccountState.hasVoted, false);
+      assert.equal(voterAccountState.voterType, 2);
+
+      return voterAccountPDA;
+    }
+
+    let staker1VoteAccount = await stakerBallot(staker1, stakeAccount1, round1PDA, campaignPDA);
+    let staker2VoteAccount = await stakerBallot(staker2, stakeAccount2, round1PDA, campaignPDA);
+    let staker3VoteAccount = await stakerBallot(staker3, stakeAccount3, round1PDA, campaignPDA);
+    let staker4VoteAccount = await stakerBallot(staker4, stakeAccount4, round1PDA, campaignPDA);
+    let staker5VoteAccount = await stakerBallot(staker5, stakeAccount5, round1PDA, campaignPDA);
+
+    // Donators ballot for the ability to cast votes
+    async function donatorBallot(donator: anchor.web3.Keypair, donatorAccountPDA: anchor.web3.PublicKey,
+       round: anchor.web3.PublicKey, campaign: anchor.web3.PublicKey, config: anchor.web3.PublicKey)
+      : Promise<anchor.web3.PublicKey> {
+
+      let [voterAccountPDA, voterAccountBump] = await getVoterAccountPDA(program, round, donator.publicKey);
+      await program.methods
+        .initDonatorVoting()
+        .accounts({
+          config: config,
+          campaign: campaign,
+          round: round,
+          donator: donator.publicKey,
+          donatorAccount: donatorAccountPDA,
+          voterAccount: voterAccountPDA
+        })
+        .signers([donator])
+        .rpc();
+
+      let totalDonations = await (await program.account.round.fetch(round)).balance.toNumber();
+      let donation = await (await program.account.donator.fetch(donatorAccountPDA)).amount.toNumber();
+      let votingRights = await (await program.account.config.fetch(config)).donatorVotingRights;
+
+      let expected_voting_power = Math.trunc((donation / totalDonations) * votingRights);
+
+      let voterAccountState = await program.account.nextRoundVoter.fetch(voterAccountPDA);
+      assert.equal(voterAccountState.votingPower, expected_voting_power);
+      assert.equal(voterAccountState.hasVoted, false);
+      assert.equal(voterAccountState.voterType, 1);
+
+      //return [voterAccountPDA, voterAccountBump];
+      return voterAccountPDA;
+    }
+
+    let donator1VoteAccount = await donatorBallot(donator1, donatorAccount1, round1PDA, campaignPDA, configPDA);
+    let donator2VoteAccount = await donatorBallot(donator2, donatorAccount2, round1PDA, campaignPDA, configPDA);
+
+    // Vote
+    async function vote(user: anchor.web3.Keypair, userVoterAccount: anchor.web3.PublicKey, 
+      round: anchor.web3.PublicKey, roundVoteAccount: anchor.web3.PublicKey, choice: boolean) {
+      let voter = user;
+      let voterAccountPDA = userVoterAccount;
+
+      let roundVoteState = await program.account.roundVote.fetch(roundVoteAccount);
+      let continueVotes = roundVoteState.continueCampaign;
+      let terminateVotes = roundVoteState.terminateCampaign;
+      let donatorsVoted = roundVoteState.donatorsVoted.toNumber();
+      let stakersVoted = roundVoteState.stakersVoted.toNumber();
+
+  
+      await program.methods 
+        .vote(choice)
+        .accounts({
+          campaign: campaignPDA,
+          round: round,
+          voterAccount: voterAccountPDA,
+          voter: voter.publicKey,
+          roundVotes: roundVoteAccount
+        })
+        .signers([voter])
+        .rpc();
+
+      roundVoteState = await program.account.roundVote.fetch(roundVoteAccount);
+      let updatedContinueVotes = roundVoteState.continueCampaign;
+      let updatedTerminateVotes = roundVoteState.terminateCampaign;
+      let updatedDonatorsVoted = roundVoteState.donatorsVoted.toNumber();
+      let updatedStakersVoted = roundVoteState.stakersVoted.toNumber();
+
+      let voterAccountState = await program.account.nextRoundVoter.fetch(voterAccountPDA);
+      let votingPower = voterAccountState.votingPower;
+      assert.equal(voterAccountState.hasVoted, true);
+
+      if(choice == true) {
+        assert.equal(updatedContinueVotes, continueVotes + votingPower);
+        assert.equal(updatedTerminateVotes, terminateVotes);
+      } else {
+        assert.equal(updatedTerminateVotes, terminateVotes + votingPower);
+        assert.equal(updatedContinueVotes, continueVotes);
+      }
+
+      if(voterAccountState.voterType == 1) {
+        assert.equal(updatedDonatorsVoted, donatorsVoted + 1);
+        assert.equal(updatedStakersVoted, stakersVoted);
+      } else if (voterAccountState.voterType == 2) {
+        assert.equal(updatedStakersVoted, stakersVoted + 1);
+        assert.equal(updatedDonatorsVoted, donatorsVoted);
+      }
+    }
+
+    await vote(staker1, staker1VoteAccount, round1PDA, round1VotesAccount, true);
+    await vote(staker2, staker2VoteAccount, round1PDA, round1VotesAccount, true);
+    await vote(staker3, staker3VoteAccount, round1PDA, round1VotesAccount, true);
+    await vote(staker4, staker4VoteAccount, round1PDA, round1VotesAccount, true);
+    await vote(staker5, staker5VoteAccount, round1PDA, round1VotesAccount, false);
+
+    await vote(donator1, donator1VoteAccount, round1PDA, round1VotesAccount, true);
+    await vote(donator2, donator2VoteAccount, round1PDA,  round1VotesAccount, true);
+
+    let voteAccountState = await program.account.roundVote.fetch(round1VotesAccount);
+    console.log("Continue campaign votes?: ", voteAccountState.continueCampaign);
+    console.log("Terminate campaign votes?: ", voteAccountState.terminateCampaign);
+    console.log(`${voteAccountState.donatorsVoted} donators voted this round`);
+    console.log(`${voteAccountState.stakersVoted} stakers voted this round`);
+
+    
+    // Try to tally votes and start next round(This will fail because there's no good
+    // way to fake 24 hours passing by, but it works in the actual application as long)
+    // as a whole day has passed by.
+    let [round2PDA, round2Bump] = await getRoundPDA(program, campaignPDA, 2);
+
+    let tx1 = await program.methods
+      .tallyVotes()
+      .accounts({
+        config: configPDA,
+        campaign: campaignPDA,
+        round: round1PDA,
+        roundVotes: round1VotesAccount
+      })
+      .signers([])
+      .instruction();
+
+    let tx2 = await program.methods
+      .startNextRound(new anchor.BN(450))
+      .accounts({
+        fundstarter: user.publicKey,
+        campaign: campaignPDA,
+        currentRound: round1PDA,
+        nextRound: round2PDA,
+      })
+      .signers([user])
+      .instruction();
+
+    let transaction = new anchor.web3.Transaction();
+    await transaction.add(tx1);
+    await transaction.add(tx2);
+
+    try {
+      const signature = await anchor.web3.sendAndConfirmTransaction(
+        provider.connection,
+        transaction,
+        [user]
+      );
+
+      campaignState = await program.account.campaign.fetch(campaignPDA);
+      round1State = await program.account.round.fetch(round1PDA);
+      voteAccountState = await program.account.roundVote.fetch(round1VotesAccount);
+
+      assert.equal(campaignState.canStartNextRound, true);
+      assert.equal(round1State.status, 3); 
+      assert.equal(voteAccountState.votingEnded, true);
+    } catch(_err) {
+      console.log("yup, I expected this lol!");
+    }
+
+    // Start a new campaign with only one round this time to test
+    // withdrawal endpoint and verify that it works as expected
+    user = anchor.web3.Keypair.generate();
+    await airdrop(provider.connection, user, 2);
+
+    [campaignPDA, campaignBump] = await getCampaignPDA(program, user.publicKey);
+    [vaultPDA, vaultBump] = await getVaultPDA(program, campaignPDA);
+    [round1PDA, roundBump] = await getRoundPDA(program, campaignPDA, 1);
+    
+    console.log("Starting campaign...");
+    expected_description = "Help me pay my medical bills";
+    expected_target = 200;
+    expected_number_of_rounds = 1;
+    expected_initial_target = 150;
+    expected_cid = "4tY5KFLJ290154892LLJLDJJ99488422";
+
+    await program.methods
+      .startCampaign(
+        expected_description,
+        new anchor.BN(expected_target),
+        expected_number_of_rounds,
+        new anchor.BN(expected_initial_target),
+        expected_cid
+      )
+      .accounts({
+        fundstarter: user.publicKey,
+        campaign: campaignPDA,
+        vault: vaultPDA,
+        round: round1PDA,
+        tokenMint: nativeMintAddress,
+      })
+      .signers([user])
+      .rpc();
+
+    round1State = await program.account.round.fetch(round1PDA);
+    assert.equal(round1State.target.toNumber(), expected_target);
+
+    async function createModAccount(user: anchor.web3.Keypair, userStakeAccount: anchor.web3.PublicKey,
+       campaign: anchor.web3.PublicKey, config: anchor.web3.PublicKey)
+      : Promise<anchor.web3.PublicKey> {
+
+      let staker = user;
+      let stakeAccount = userStakeAccount;
+
+      let [modAccountPDA, modAccountBump] = await getModeratorAccountPDA(program, campaign, staker.publicKey);
+      await program.methods
+        .initStakerModeration()
+        .accounts({
+          config: config,
+          campaign: campaign,
+          moderatorAccount: modAccountPDA,
+          staker: staker.publicKey,
+          stakeAccount: stakeAccount,
+        })
+        .signers([staker])
+        .rpc();
+    
+      let configState = await program.account.config.fetch(config);
+      let moderatorState = await program.account.moderator.fetch(modAccountPDA);
+      let stakerAccountState = await program.account.stakeAccount.fetch(stakeAccount);
+      
+      let deposit = stakerAccountState.deposit.toNumber();
+      let totalStake = configState.totalAmountStaked.toNumber();
+      let stakerRights = configState.stakerModerationRights;
+      let expected_voting_power = Math.trunc((deposit / totalStake) * stakerRights);
+
+      assert.equal(moderatorState.votingPower, expected_voting_power);
+      assert.equal(moderatorState.hasVoted, false);
+      assert.equal(moderatorState.moderatorType, 1);
+
+      return modAccountPDA;
+    }
+
+    async function moderate(user: anchor.web3.Keypair, userModAccount: anchor.web3.PublicKey, 
+      campaign: anchor.web3.PublicKey, config: anchor.web3.PublicKey, choice: boolean) {
+      let moderator = user;
+      let modAccountPDA = userModAccount;
+
+      let campaignState = await program.account.campaign.fetch(campaign);
+      let positiveVotes = campaignState.isValidVotes;
+      let negativeVotes = campaignState.notValidVotes;
+      let modsVoted = campaignState.moderatorVotes.toNumber();
+
+      await program.methods 
+        .moderate(choice)
+        .accounts({
+          config: config,
+          campaign: campaign,
+          moderatorAccount: modAccountPDA,
+          moderator: moderator.publicKey
+        })
+        .signers([moderator])
+        .rpc();
+
+      campaignState = await program.account.campaign.fetch(campaign);
+      let updatedPositiveVotes = campaignState.isValidVotes;
+      let updatedNegativeVotes = campaignState.notValidVotes;
+      let updatedModsVoted = campaignState.moderatorVotes.toNumber();
+
+      let modAccountState = await program.account.moderator.fetch(modAccountPDA);
+      let votingPower = modAccountState.votingPower;
+      assert.equal(modAccountState.hasVoted, true);
+
+      if(choice == true) {
+        assert.equal(updatedPositiveVotes, positiveVotes + votingPower);
+        assert.equal(updatedNegativeVotes, negativeVotes);
+      } else {
+        assert.equal(updatedNegativeVotes, negativeVotes + votingPower);
+        assert.equal(updatedPositiveVotes, positiveVotes);
+      }
+      assert.equal(updatedModsVoted, modsVoted + 1);
+    }
+
+    // Create stakers moderation accounts
+    let staker1ModAccount = await createModAccount(staker1, stakeAccount1, campaignPDA, configPDA);
+    let staker2ModAccount = await createModAccount(staker2, stakeAccount2, campaignPDA, configPDA);
+    let staker3ModAccount = await createModAccount(staker3, stakeAccount3, campaignPDA, configPDA);
+    let staker4ModAccount = await createModAccount(staker4, stakeAccount4, campaignPDA, configPDA);
+    let staker5ModAccount = await createModAccount(staker5, stakeAccount5, campaignPDA, configPDA);
+
+    donator1 = anchor.web3.Keypair.generate();
+    amount = 40;
+    donatorAccount1 = await donate(
+      amount,
+      donator1,
+      program,
+      campaignPDA,
+      round1PDA,
+      vaultPDA
+    );
+
+    donator2 = anchor.web3.Keypair.generate();
+    amount = 50;
+    donatorAccount2 = await donate(
+      amount,
+      donator2,
+      program,
+      campaignPDA,
+      round1PDA,
+      vaultPDA
+    );
+    
+    let donator3 = anchor.web3.Keypair.generate();
+    amount = 60;
+    let donatorAccount3 = await donate(
+      amount,
+      donator3,
+      program,
+      campaignPDA,
+      round1PDA,
+      vaultPDA
+    );
+
+    let donator4 = anchor.web3.Keypair.generate();
+    amount = 30;
+    let donatorAccount4 = await donate(
+      amount,
+      donator4,
+      program,
+      campaignPDA,
+      round1PDA,
+      vaultPDA
+    );
+
+    let donator5 = anchor.web3.Keypair.generate();
+    amount = 30;
+    let donatorAccount5 = await donate(
+      amount,
+      donator5,
+      program,
+      campaignPDA,
+      round1PDA,
+      vaultPDA
+    );
+
+
+    // START WITHDRAWAL
+    let userTokenAccount = await spl.createAssociatedTokenAccount(
+      provider.connection,
+      user,
+      nativeMintAddress,
+      user.publicKey
+    ); 
+
+    // lets us get either of two different scenarios on each run,
+    // either positive moderation results(where the user can withdraw),
+    // or negative(where the user cann't withdraw)
+    let chance = Math.floor(Math.random() * 2);
+    console.log("Chance: ", chance);
+
+    if(chance == 0) {
+      // Positive moderation results, withdrawal should be allowed
+      await moderate(staker5, staker5ModAccount, campaignPDA, configPDA, true);
+      await moderate(staker2, staker2ModAccount, campaignPDA, configPDA, true);
+      await moderate(staker4, staker4ModAccount, campaignPDA, configPDA, false);
+      await moderate(staker3, staker3ModAccount, campaignPDA, configPDA, true);
+      await moderate(staker1, staker1ModAccount, campaignPDA, configPDA, true);
+
+      campaignState = await program.account.campaign.fetch(campaignPDA);
+      let amountRaised = campaignState.balance.toNumber();
+
+      await program.methods
+        .withdraw()
+        .accounts({
+          campaign: campaignPDA,
+          round: round1PDA,
+          vault: vaultPDA,
+          fundstarter: user.publicKey,
+          walletToWithdrawTo: userTokenAccount,
+        })
+        .signers([user])
+        .rpc();
+
+      campaignState = await program.account.campaign.fetch(campaignPDA);
+      console.log("Is_Valid_Campaign votes?: ", campaignState.isValidVotes);
+      console.log("Not_Valid_Campaign votes?: ", campaignState.notValidVotes);
+      console.log("Is_Valid_Campaign?: ", campaignState.isValidCampaign);
+      assert.equal(campaignState.isValidCampaign, true);
+      console.log(`${campaignState.moderatorVotes} mods voted this round`);
+
+      let tokenAccountState = await provider.connection.getTokenAccountBalance(userTokenAccount);
+      let userWithdrawalBalance = tokenAccountState.value.uiAmount;
+
+      // Last round so status should be set to 'Ended'(3)
+      assert.equal(campaignState.status, 3);
+      console.log("Funds withdrawn: ", userWithdrawalBalance);
+      assert.equal(userWithdrawalBalance, amountRaised);
+
+    } else if(chance == 1) {
+      // Negative moderation results, withdrawal should fail
+      await moderate(staker5, staker5ModAccount, campaignPDA, configPDA, false);
+      await moderate(staker2, staker2ModAccount, campaignPDA, configPDA, false);
+      await moderate(staker4, staker4ModAccount, campaignPDA, configPDA, false);
+      await moderate(staker1, staker1ModAccount, campaignPDA, configPDA, true);
+      await moderate(staker3, staker3ModAccount, campaignPDA, configPDA, false);
+
+      campaignState = await program.account.campaign.fetch(campaignPDA);
+      console.log("Is_Valid_Campaign votes?: ", campaignState.isValidVotes);
+      console.log("Not_Valid_Campaign votes?: ", campaignState.notValidVotes);
+      console.log("Is_Valid_Campaign?: ", campaignState.isValidCampaign);
+      assert.equal(campaignState.isValidCampaign, false);
+      console.log(`${campaignState.moderatorVotes} mods voted this round`);
+
+      try {
+        await program.methods
+          .withdraw()
+          .accounts({
+            campaign: campaignPDA,
+            round: round1PDA,
+            vault: vaultPDA,
+            fundstarter: user.publicKey,
+            walletToWithdrawTo: userTokenAccount
+          })
+          .signers([user])
+          .rpc();
+        chai.assert(false, "Should fail due to invalid campaign")
+      } catch(_err) {
+        expect(_err).to.be.instanceOf(AnchorError);
+        const err: AnchorError = _err;
+        expect(err.error.errorCode.number).to.equal(2003);
+        expect(err.error.errorCode.code).to.equal("ConstraintRaw");
+        expect(err.program.equals(program.programId)).is.true;
+      }
+      campaignState = await program.account.campaign.fetch(campaignPDA);
+      console.log("Campaign status: ", campaignState.status);
+      assert.equal(campaignState.status, 2);
+    }
   });
+
 });

@@ -68,15 +68,14 @@ export const mintToAccount = async (connection, account, mint,
 
 
 // stakingPoolPDA
-export const getConfigPDA = async(program, authorityAddress: anchor.web3.PublicKey)
+export const getConfigPDA = async(program)
     : Promise<[anchor.web3.PublicKey, number]> => {
 
     let pda: anchor.web3.PublicKey;
     let bump: number;
 
     [pda, bump] = await anchor.web3.PublicKey.findProgramAddress(
-        [Buffer.from(anchor.utils.bytes.utf8.encode("config")),
-        authorityAddress.toBuffer()],
+        [Buffer.from(anchor.utils.bytes.utf8.encode("config"))],
         program.programId
     );
 
@@ -218,7 +217,7 @@ export const getStakeAccountPDA = async(program, stakerAddress: anchor.web3.Publ
   
 
   // voterAccountPDA
-export const getVoterAccountPDA = async(program,roundAddress: anchor.web3.PublicKey, userAddress: anchor.web3.PublicKey)
+export const getVoterAccountPDA = async(program, roundAddress: anchor.web3.PublicKey, userAddress: anchor.web3.PublicKey)
 : Promise<[anchor.web3.PublicKey, number]> => {
     let pda: anchor.web3.PublicKey;
     let bump: number;
