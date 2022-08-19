@@ -1,13 +1,13 @@
 [features]
 seeds = false
-[programs.localnet]
-beneficence = "duWSjMfQ8HYiikV3N6kUfMdBHHN8BaNzv5KWcXaUawA"
+[programs.devnet]
+pandora = "DLkygNkiyVjJ4hu2fVV7M1fjX8DKdXbB3TgFmfwwKfqr"
 
 [registry]
 url = "https://anchor.projectserum.com"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "/home/ademola/.config/solana/id.json"
 
 [scripts]
