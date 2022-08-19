@@ -2,13 +2,12 @@
 Pandora: Decentralized fundraising platform.
 
 ## Description
-Pandora is a smart contract that replicates the idea of goFundMe, a fundraising platform with which 
-users can source for fund from benefactors. It implements the concept of rounds(a single fundraising
-campaign might have multiple rounds) and allows for staking of a native token. Stakers get benefits
-such as being able to flag a campaign as fraudulent and taking part in voting to decide whether or not
-a campaign may begin the next round. Donators to a round of a campaign also get to participate in the
-vote that decides whether or not that campaign may progress to the next round based on its perceived 
-validity.
+Pandora is a smart contract that replicates the idea of a traditional fundraising platform with which users 
+can source for funds from benefactors, except it's fully decentralized! It implements the concept of rounds
+(a single fundraising campaign might have multiple rounds) and allows for staking of a native token. Stakers 
+get benefits such as being able to flag a campaign as fraudulent and taking part in voting to decide whether 
+or not a campaign may begin the next round. Donators to a round of a campaign also get to participate in the
+vote that decides whether or not that campaign may progress to the next round based on its perceived validity.
 
 Pandora lives on the Solana devnet at address: **DLkygNkiyVjJ4hu2fVV7M1fjX8DKdXbB3TgFmfwwKfqr**
 
