@@ -485,8 +485,8 @@ describe("beneficence", async () => {
 
     
     // Try to tally votes and start next round(This will fail because there's no good
-    // way to fake 24 hours passing by, but it works in the actual application as long)
-    // as a whole day has passed by.
+    // way to fake 24 hours passing by, but it works in the actual application as long
+    // as a whole day has passed).
     let [round2PDA, round2Bump] = await getRoundPDA(program, campaignPDA, 2);
 
     let tx1 = await program.methods
