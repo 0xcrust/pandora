@@ -1,4 +1,4 @@
-#
+# Pandora
 Pandora: Decentralized fundraising platform.
 
 ## Description
