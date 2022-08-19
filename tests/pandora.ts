@@ -21,7 +21,7 @@ import {
 import { assert, config, expect } from "chai";
 import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 
-describe("beneficence", async () => {
+describe("pandora", async () => {
   // Configure the client to use the local cluster.
   //const provider = anchor.AnchorProvider.env();
   const provider = anchor.AnchorProvider.env();
