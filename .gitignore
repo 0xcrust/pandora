@@ -5,5 +5,3 @@ target
 node_modules
 test-ledger
 .yarn
-programs/pandora/src/lib2.rs
-programs/pandora/src/wrong.rs
