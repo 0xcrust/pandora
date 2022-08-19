@@ -951,7 +951,7 @@ pub struct Campaign {
     cid: String,
     // Amount raised so far this campaign
     balance: u64,
-    // Spl token mint: Could be SOL, USDT, BENE, etc
+    // Spl token mint: Could be SOL, USDT or most likely, a native token
     token_mint: Pubkey,
     // Campaign status
     status: u8,

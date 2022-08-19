@@ -27,7 +27,7 @@ describe("beneficence", async () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.Beneficence as Program<Pandora>;
+  const program = anchor.workspace.Pandora as Program<Pandora>;
 
   const admin = anchor.web3.Keypair.generate();
   let [configPDA, configBump] = await getConfigPDA(program);
@@ -708,7 +708,6 @@ describe("beneficence", async () => {
       round1PDA,
       vaultPDA
     );
-
 
     // START WITHDRAWAL
     let userTokenAccount = await spl.createAssociatedTokenAccount(
