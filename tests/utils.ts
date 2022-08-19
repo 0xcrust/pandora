@@ -118,14 +118,7 @@ export const getRoundPDA = async(program, campaignAddress: anchor.web3.PublicKey
 : Promise<[anchor.web3.PublicKey, number]> => {
     let pda: anchor.web3.PublicKey;
     let bump: number;
-
-/*
-    [pda, bump] = await anchor.web3.PublicKey.findProgramAddress(
-        [Buffer.from(anchor.utils.bytes.utf8.encode("round")),
-        campaignAddress.toBuffer(), new anchor.BN(number).toBuffer("le", 8)],
-        program.programId
-    );*/
-
+    
     [pda, bump] = await anchor.web3.PublicKey.findProgramAddress(
         [Buffer.from(anchor.utils.bytes.utf8.encode("round")),
         campaignAddress.toBuffer(), new anchor.BN(number).toBuffer('le', 8)],
