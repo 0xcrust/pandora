@@ -1,7 +1,7 @@
 use anchor_lang::{prelude::*, solana_program::clock};
 use anchor_spl::token::{CloseAccount, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("DLkygNkiyVjJ4hu2fVV7M1fjX8DKdXbB3TgFmfwwKfqr");
+declare_id!("ERCw53LxmDDUZsjay7nRyPJJcHkEWEvxxLZ8bmeYWJDf");
 
 const DAY_IN_SECONDS: u64 = 60 * 60 * 24;
 
@@ -291,12 +291,12 @@ pub mod pandora {
             authority: campaign.to_account_info(),
         };
 
-        let state_seeds = &[
+        let campaign_seeds = &[
             b"campaign".as_ref(),
             fundstarter.key.as_ref(),
             &[campaign.bump],
         ];
-        let signer = &[&state_seeds[..]];
+        let signer = &[&campaign_seeds[..]];
 
         let cpi_ctx = CpiContext::new(token_program.to_account_info(), transfer_instruction)
             .with_signer(signer);

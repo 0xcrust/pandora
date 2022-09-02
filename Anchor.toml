@@ -1,7 +1,7 @@
 [features]
 seeds = false
 [programs.devnet]
-pandora = "DLkygNkiyVjJ4hu2fVV7M1fjX8DKdXbB3TgFmfwwKfqr"
+pandora = "ERCw53LxmDDUZsjay7nRyPJJcHkEWEvxxLZ8bmeYWJDf"
 
 [registry]
 url = "https://anchor.projectserum.com"
